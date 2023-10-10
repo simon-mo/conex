@@ -1,6 +1,5 @@
 use crate::hash::StreamingHashWriter;
 use crate::planner::ConexFile;
-use bytes::BytesMut;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::vec;

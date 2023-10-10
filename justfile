@@ -23,5 +23,5 @@ test-push-workload:
     #!/usr/bin/env bash
     set -ex
     docker build -t localhost:5000/workload -f workloads/Dockerfile workloads
-    cargo run -- push localhost:5000/workload
+    cargo run --release -- push localhost:5000/workload
 
