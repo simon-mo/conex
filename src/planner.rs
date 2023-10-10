@@ -24,15 +24,13 @@ impl ConexPlanner {
     pub fn ingest_dir(&mut self, dir_path: &str) {
         let base_path = PathBuf::from(dir_path.clone());
 
-        if base_path.metadata().is_err() {
-            if base_path.metadata().err().unwrap().kind() == std::io::ErrorKind::PermissionDenied {
-                panic!(
-                    "Path is not accessible.
-                Run `sudo setfacl -m u:ubuntu:rx /var /var/lib /var/lib/docker`
-                and `sudo setfacl -R -m u:ubuntu:rx /var /var/lib /var/lib/docker/overlay2`
-                "
-                );
-            }
+        if base_path.metadata().is_err() && base_path.metadata().err().unwrap().kind() == std::io::ErrorKind::PermissionDenied {
+            panic!(
+                "Path is not accessible.
+            Run `sudo setfacl -m u:ubuntu:rx /var /var/lib /var/lib/docker`
+            and `sudo setfacl -R -m u:ubuntu:rx /var /var/lib /var/lib/docker/overlay2`
+            "
+            );
         }
 
         if !base_path.is_dir() {
@@ -70,6 +68,6 @@ impl ConexPlanner {
 
     pub fn generate_plan(&self) -> HashMap<String, Vec<ConexFile>> {
         // currently it is a noop.
-        return self.layer_to_files.clone();
+        self.layer_to_files.clone()
     }
 }

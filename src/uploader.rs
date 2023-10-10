@@ -17,7 +17,7 @@ async fn upload_layer(
     repo_name: String,
     _key: String,
     files: Vec<ConexFile>,
-) -> () {
+) {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
     let (hash_tx, hash_rx) = tokio::sync::oneshot::channel::<String>();

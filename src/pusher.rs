@@ -10,7 +10,7 @@ pub struct ContainerPusher {
 
 impl ContainerPusher {
     pub fn new(docker: Docker) -> Self {
-        Self { docker: docker }
+        Self { docker }
     }
 
     pub async fn push(&self, source_image: String) {
@@ -56,7 +56,7 @@ impl ContainerPusher {
         let plan = planner.generate_plan();
 
         let uploader =
-            ConexUploader::new(source_image.split(":").collect::<Vec<&str>>()[1].to_owned());
+            ConexUploader::new(source_image.split(':').collect::<Vec<&str>>()[1].to_owned());
         uploader.upload(plan).await;
     }
 }
