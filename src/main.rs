@@ -1,5 +1,6 @@
 mod hash;
 mod planner;
+mod progress;
 mod pusher;
 mod uploader;
 
@@ -29,6 +30,8 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    tracing_subscriber::fmt::init();
 
     let docker = Docker::connect_with_local_defaults().unwrap();
     docker.version().await.expect("Can't talk to dockerd");

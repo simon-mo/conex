@@ -1,6 +1,7 @@
 use core::panic;
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, Metadata};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 pub struct ConexPlanner {
@@ -10,8 +11,9 @@ pub struct ConexPlanner {
 #[derive(Clone, Debug)]
 pub struct ConexFile {
     pub path: PathBuf,
-    pub metadata: Metadata,
     pub relative_path: PathBuf,
+    pub size: usize,
+    pub inode: u64,
 }
 
 impl ConexPlanner {
@@ -24,7 +26,9 @@ impl ConexPlanner {
     pub fn ingest_dir(&mut self, dir_path: &str) {
         let base_path = PathBuf::from(dir_path.clone());
 
-        if base_path.metadata().is_err() && base_path.metadata().err().unwrap().kind() == std::io::ErrorKind::PermissionDenied {
+        if base_path.metadata().is_err()
+            && base_path.metadata().err().unwrap().kind() == std::io::ErrorKind::PermissionDenied
+        {
             panic!(
                 "Path is not accessible.
             Run `sudo setfacl -m u:ubuntu:rx /var /var/lib /var/lib/docker`
@@ -55,8 +59,9 @@ impl ConexPlanner {
                 } else {
                     file_metadata_vec.push(ConexFile {
                         path: entry.path(),
-                        metadata,
                         relative_path,
+                        size: metadata.len() as usize,
+                        inode: metadata.ino() as u64,
                     });
                 }
             }

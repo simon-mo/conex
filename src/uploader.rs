@@ -1,5 +1,7 @@
 use crate::hash::StreamingHashWriter;
 use crate::planner::ConexFile;
+use crate::progress::{ProgressStreamer, ProgressWriter, UpdateItem};
+use bytes::Bytes;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::vec;
@@ -9,20 +11,24 @@ use zstd::stream::write::Encoder as ZstdEncoder;
 pub struct ConexUploader {
     client: Client,
     repo_name: String,
+    progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 64 * 1024 * 1024;
 async fn upload_layer(
     client: Client,
     repo_name: String,
-    _key: String,
+    key: String,
     files: Vec<ConexFile>,
+    progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 ) {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
     let (hash_tx, hash_rx) = tokio::sync::oneshot::channel::<String>();
     let mut upload_tasks = tokio::task::JoinSet::new();
 
+    let key_ = key.clone();
+    let progress_sender_ = progress_sender.clone();
     upload_tasks.spawn_blocking(move || {
         let hasher = StreamingHashWriter::new(
             producer.as_mut_base(),
@@ -31,12 +37,19 @@ async fn upload_layer(
             })),
         );
         let encoder = ZstdEncoder::new(hasher, 0).unwrap().auto_finish();
-        let mut tar_builder = TarBuilder::new(encoder);
+        // let mut tar_builder = TarBuilder::new(encoder);
+
+        let progress_writer = ProgressWriter::new(
+            encoder,
+            key_,
+            crate::progress::UpdateType::TarAdd,
+            progress_sender_,
+        );
+        let mut tar_builder = TarBuilder::new(progress_writer);
 
         for file in files {
-            if file.relative_path.ends_with("layer-1") {
-                println!("packing layer-1 {:?}", file);
-            }
+            todo!("Handle link differently");
+
             tar_builder
                 .append_path_with_name(file.path, file.relative_path)
                 .unwrap();
@@ -93,10 +106,11 @@ async fn upload_layer(
                 }
             };
 
-            println!(
-                "Sending chunk: {}-{}",
-                start_offset,
-                start_offset + buf_len - 1
+            let streamer = ProgressStreamer::new(
+                progress_sender.clone(),
+                key.clone(),
+                crate::progress::UpdateType::SocketSend,
+                Bytes::copy_from_slice(&send_buffer[0..buf_len]),
             );
 
             // Note that because content range is inclusive, we need to subtract 1 from the end offset.
@@ -108,7 +122,8 @@ async fn upload_layer(
                     "Content-Range",
                     format!("{}-{}", start_offset, start_offset + buf_len - 1),
                 )
-                .body(send_buffer[0..buf_len].to_vec())
+                // .body(send_buffer[0..buf_len].to_vec())
+                .body(reqwest::Body::wrap_stream(streamer))
                 .send()
                 .await
                 .unwrap();
@@ -141,10 +156,14 @@ async fn upload_layer(
 }
 
 impl ConexUploader {
-    pub fn new(repo_name: String) -> Self {
+    pub fn new(
+        repo_name: String,
+        progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+    ) -> Self {
         Self {
             client: Client::new(),
             repo_name,
+            progress_sender,
         }
     }
 
@@ -156,6 +175,7 @@ impl ConexUploader {
                 self.repo_name.clone(),
                 layer_id,
                 paths,
+                self.progress_sender.clone(),
             ));
         });
         while let Some(result) = parallel_uploads.join_next().await {
