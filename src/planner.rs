@@ -64,7 +64,7 @@ impl ConexPlanner {
                     path: entry.path(),
                     relative_path,
                     size: metadata.len() as usize,
-                    inode: metadata.ino() as u64,
+                    inode: metadata.ino(),
                     hard_link_to: None,
                     ctime_nsec: metadata.ctime_nsec(),
                 });

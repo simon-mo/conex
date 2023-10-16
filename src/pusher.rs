@@ -1,7 +1,7 @@
 use bollard::{service::ContainerConfig, Docker};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
-use oci_spec::image::{Descriptor, History};
+use oci_spec::image::{Descriptor};
 use reqwest::Client;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tracing::info;
@@ -51,15 +51,13 @@ fn convert_docker_config_to_oci_config(src_config: ContainerConfig) -> oci_spec:
     config.set_user(src_config.user.filter(|u| !u.is_empty()));
     config.set_exposed_ports(
         src_config
-            .exposed_ports
-            .and_then(|p| Some(p.iter().map(|(k, _)| k.clone()).collect::<Vec<String>>())),
+            .exposed_ports.map(|p| p.keys().cloned().collect::<Vec<String>>()),
     );
     config.set_env(src_config.env);
     config.set_cmd(src_config.cmd);
     config.set_volumes(
         src_config
-            .volumes
-            .and_then(|v| Some(v.iter().map(|(k, _)| k.clone()).collect::<Vec<String>>())),
+            .volumes.map(|v| v.keys().cloned().collect::<Vec<String>>()),
     );
     config.set_working_dir(src_config.working_dir.filter(|u| !u.is_empty()));
     config.set_entrypoint(src_config.entrypoint);
