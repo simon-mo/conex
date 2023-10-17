@@ -38,3 +38,12 @@ get-config:
 test-docker-pull:
     docker pull localhost:5000/workload
     docker run --rm localhost:5000/workload ls -l
+
+test-real-push-workload:
+    docker tag localhost:5000/workload simonmok/workload
+    cargo run -- push simonmok/workload
+
+test-real-push-alpine:
+    docker pull alpine
+    docker tag alpine simonmok/alpine
+    cargo run -- push simonmok/alpine

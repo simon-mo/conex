@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::vec;
 use tar::{Builder as TarBuilder, EntryType, Header};
+use tracing::info;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 
@@ -64,7 +65,7 @@ async fn upload_layer(
         tar_builder.follow_symlinks(false);
 
         for file in files {
-            let meta = &file.path.metadata().unwrap();
+            let meta = &file.path.symlink_metadata().unwrap();
             match file.hard_link_to {
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
@@ -102,7 +103,6 @@ async fn upload_layer(
     upload_tasks.spawn(async move {
         // Implementing the chunked upload protocol.
         // https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pushing-a-blob-in-chunks
-        let mut total_bytes: usize = 0;
 
         let create_upload_resp = client
             .execute(repo_info.upload_blob_request())
@@ -149,21 +149,38 @@ async fn upload_layer(
 
             // Note that because content range is inclusive, we need to subtract 1 from the end offset.
             let upload_chunk_resp = client
-                .patch(location)
-                .header("Content-Type", "application/octet-stream")
-                .header("Content-Length", buf_len)
-                .header(
-                    "Content-Range",
-                    format!("{}-{}", start_offset, start_offset + buf_len - 1),
-                )
-                // .body(send_buffer[0..buf_len].to_vec())
-                .body(reqwest::Body::wrap_stream(streamer))
-                .send()
+                .execute({
+                    let req = client
+                        .patch(location)
+                        .header("Content-Type", "application/octet-stream")
+                        .header("Content-Length", buf_len)
+                        .header(
+                            "Content-Range",
+                            format!("{}-{}", start_offset, start_offset + buf_len - 1),
+                        )
+                        // .body(send_buffer[0..buf_len].to_vec())
+                        .body(reqwest::Body::wrap_stream(streamer));
+
+                    info!(
+                        "Chunk range {}-{}",
+                        start_offset,
+                        start_offset + buf_len - 1
+                    );
+
+                    if let Some(token) = repo_info.auth_token.as_ref() {
+                        req.header("Authorization", token).build().unwrap()
+                    } else {
+                        req.build().unwrap()
+                    }
+                })
                 .await
                 .unwrap();
-            assert!(upload_chunk_resp.status() == 202);
-            total_bytes += buf_len;
-            start_offset += buf_len + 1;
+            assert!(
+                upload_chunk_resp.status() == 202,
+                "{}",
+                upload_chunk_resp.text().await.unwrap()
+            );
+            start_offset += buf_len;
 
             location = upload_chunk_resp
                 .headers()
@@ -181,10 +198,20 @@ async fn upload_layer(
         // Finish the upload with the final PUT request
         let hash = hash_socket_rx.await.unwrap();
         let url = format!("{}&digest=sha256:{}", location, hash); //TODO: proper url parse
-        let upload_final_resp = client.put(&url).send().await.unwrap();
+        let upload_final_resp = client
+            .execute({
+                let req = client.put(&url);
+                if let Some(token) = repo_info.auth_token.as_ref() {
+                    req.header("Authorization", token).build().unwrap()
+                } else {
+                    req.build().unwrap()
+                }
+            })
+            .await
+            .unwrap();
         assert!(upload_final_resp.status() == 201);
 
-        total_bytes
+        start_offset
     });
 
     let mut bytes_count = HashSet::new();

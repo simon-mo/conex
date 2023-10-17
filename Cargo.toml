@@ -10,12 +10,14 @@ bytes = "1.5.0"
 clap = { version = "*", features = ["derive"] }
 data-encoding = "2.4.0"
 futures-core = "0.3.28"
+home = "0.5.5"
+http = "0.2.9"
 indicatif = "0.17.3"
 itertools = "0.11.0"
 num_cpus = "1.16.0"
 oci-spec = "0.6.3"
 regex = "1.10.2"
-reqwest = { version = "0.11.16", features = ["stream", "gzip"] }
+reqwest = { version = "0.11.16", features = ["stream", "gzip", "json"] }
 ring = { version = "0.16.20", features = ["std"] }
 serde = "1.0.189"
 serde_json = "1.0.107"

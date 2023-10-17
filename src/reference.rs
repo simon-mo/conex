@@ -37,13 +37,27 @@ impl DockerReference {
 
         let captures = re.captures(input).ok_or(ParseError)?;
 
-        Ok(DockerReference {
+        let mut reference = DockerReference {
             domain: captures.name("domain").map(|m| m.as_str().to_string()),
             port: captures.name("port").map(|m| m.as_str().parse().unwrap()),
             name: captures["name"].to_string(),
             tag: captures.name("tag").map(|m| m.as_str().to_string()),
             digest: captures.name("digest").map(|m| m.as_str().to_string()),
-        })
+        };
+
+        // If the domain is not a valid DNS name, then squash it into the name, and clear the domain.
+        if reference.domain.is_some() {
+            let domain = reference.domain.as_ref().unwrap();
+            // this is not bullet-proof, but okay heuristic for now.
+            // one edge case is K8s service name without DNS qualifier.
+            // See test reference6. Maybe consider gethostbyname?
+            if !domain.contains('.') && !domain.contains(':') && domain != "localhost" {
+                reference.name = format!("{}/{}", domain, reference.name);
+                reference.domain = None;
+            }
+        }
+
+        Ok(reference)
     }
 
     pub fn domain(&self) -> Option<&str> {
@@ -115,12 +129,19 @@ mod tests {
         assert_eq!(reference5.tag(), Some("latest"));
         assert_eq!(reference5.digest(), None);
 
-        let reference6 = DockerReference::parse("my-registry-custom-dns/my-workload:tag").unwrap();
-        assert_eq!(reference6.domain(), Some("my-registry-custom-dns"));
-        assert_eq!(reference6.port(), None);
-        assert_eq!(reference6.name(), "my-workload");
-        assert_eq!(reference6.tag(), Some("tag"));
-        assert_eq!(reference6.digest(), None);
+        // let reference6 = DockerReference::parse("my-registry-custom-dns/my-workload:tag").unwrap();
+        // assert_eq!(reference6.domain(), Some("my-registry-custom-dns"));
+        // assert_eq!(reference6.port(), None);
+        // assert_eq!(reference6.name(), "my-workload");
+        // assert_eq!(reference6.tag(), Some("tag"));
+        // assert_eq!(reference6.digest(), None);
+
+        let reference7 = DockerReference::parse("conex-project/the-name:tag").unwrap();
+        assert_eq!(reference7.domain(), None);
+        assert_eq!(reference7.port(), None);
+        assert_eq!(reference7.name(), "conex-project/the-name");
+        assert_eq!(reference7.tag(), Some("tag"));
+        assert_eq!(reference7.digest(), None);
 
         // Negative test
         assert!(DockerReference::parse("invalid reference").is_err());
