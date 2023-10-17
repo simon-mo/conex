@@ -105,11 +105,7 @@ async fn upload_layer(
         let mut total_bytes: usize = 0;
 
         let create_upload_resp = client
-            .post(format!(
-                "{}://{}/v2/{}/blobs/uploads/",
-                repo_info.protocol, repo_info.host, repo_info.repo_name
-            ))
-            .send()
+            .execute(repo_info.upload_blob_request())
             .await
             .unwrap();
         assert_eq!(create_upload_resp.status(), 202);

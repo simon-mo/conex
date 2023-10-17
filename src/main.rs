@@ -2,6 +2,7 @@ mod hash;
 mod planner;
 mod progress;
 mod pusher;
+mod reference;
 mod uploader;
 
 use bollard::Docker;

@@ -1,14 +1,15 @@
 use bollard::{service::ContainerConfig, Docker};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
-use oci_spec::image::{Descriptor};
-use reqwest::Client;
+use oci_spec::image::Descriptor;
+use reqwest::{Client, Method, Request, RequestBuilder};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tracing::info;
 
 use crate::{
     planner::ConexPlanner,
     progress::{UpdateItem, UpdateType},
+    reference::DockerReference,
     uploader::ConexUploader,
 };
 
@@ -16,28 +17,81 @@ use crate::{
 pub struct RepoInfo {
     pub raw_tag: String, // e.g. localhost:5000/my-repo-name-image-name:latest
 
-    pub protocol: String,    // e.g. http
-    pub host: String,        // e.g. localhost:5000
-    pub repo_name: String,   // e.g. my-repo-name-image-name
-    pub version_tag: String, // e.g. latest
+    pub reference: DockerReference,
+
+    registry_host_url: String,
 }
 
 impl RepoInfo {
     pub fn from_string(source_image: String) -> RepoInfo {
-        // Currently we are assuming source_image = localhost:5000/my-name
-        let parts = source_image.split('/').collect::<Vec<&str>>();
-        let protocol = "http";
-        let host = parts[0];
-        let repo_name = parts[1];
-        let version_tag = "latest";
+        let reference = DockerReference::parse(&source_image).unwrap();
+
+        if reference.digest().is_some() {
+            unimplemented!("Digest in image reference is not supported yet.");
+        }
+
+        let protocol = {
+            match reference.domain() {
+                Some(domain) => {
+                    if domain == "localhost" || domain.starts_with("127.") {
+                        "http".to_string()
+                    } else {
+                        "https".to_string()
+                    }
+                }
+                None => "https".to_string(), // default to docker hub
+            }
+        };
+
+        let registry_host_url = match reference.domain() {
+            Some(domain) => format!(
+                "{}://{}{}",
+                protocol,
+                domain,
+                reference
+                    .port()
+                    .and_then(|p| Some(format!(":{}", p)))
+                    .unwrap_or("".to_string())
+            ),
+            None => "https://registry-1.docker.io".to_string(),
+        };
 
         Self {
             raw_tag: source_image.to_string(),
-            protocol: protocol.to_string(),
-            host: host.to_string(),
-            repo_name: repo_name.to_string(),
-            version_tag: version_tag.to_string(),
+            reference,
+            registry_host_url,
         }
+    }
+
+    pub fn upload_blob_request(&self) -> Request {
+        Request::new(
+            Method::POST,
+            url::Url::parse(
+                format!(
+                    "{}/v2/{}/blobs/uploads/",
+                    self.registry_host_url,
+                    self.reference.name()
+                )
+                .as_str(),
+            )
+            .unwrap(),
+        )
+    }
+
+    pub fn upload_manifest_request(&self, tag: &str) -> Request {
+        Request::new(
+            Method::PUT,
+            url::Url::parse(
+                format!(
+                    "{}/v2/{}/manifests/{}",
+                    self.registry_host_url,
+                    self.reference.name(),
+                    tag
+                )
+                .as_str(),
+            )
+            .unwrap(),
+        )
     }
 }
 
@@ -51,13 +105,15 @@ fn convert_docker_config_to_oci_config(src_config: ContainerConfig) -> oci_spec:
     config.set_user(src_config.user.filter(|u| !u.is_empty()));
     config.set_exposed_ports(
         src_config
-            .exposed_ports.map(|p| p.keys().cloned().collect::<Vec<String>>()),
+            .exposed_ports
+            .map(|p| p.keys().cloned().collect::<Vec<String>>()),
     );
     config.set_env(src_config.env);
     config.set_cmd(src_config.cmd);
     config.set_volumes(
         src_config
-            .volumes.map(|v| v.keys().cloned().collect::<Vec<String>>()),
+            .volumes
+            .map(|v| v.keys().cloned().collect::<Vec<String>>()),
     );
     config.set_working_dir(src_config.working_dir.filter(|u| !u.is_empty()));
     config.set_entrypoint(src_config.entrypoint);
@@ -141,11 +197,7 @@ impl ContainerPusher {
 
         // TODO: use image config to bring in diff ids.
         let resp = reqwest::Client::new()
-            .post(format!(
-                "{}://{}/v2/{}/blobs/uploads/",
-                repo_info.protocol, repo_info.host, repo_info.repo_name
-            ))
-            .send()
+            .execute(repo_info.upload_blob_request())
             .await
             .unwrap();
         let upload_url = resp.headers().get("location").unwrap();
@@ -193,16 +245,23 @@ impl ContainerPusher {
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
 
-        for tag in vec![repo_info.version_tag, sha256_hash.clone()[..6].to_string()] {
-            let resp = reqwest::Client::new()
-                .put(format!(
-                    "{}://{}/v2/{}/manifests/{}",
-                    repo_info.protocol, repo_info.host, repo_info.repo_name, tag
-                ))
-                .body(serialized_manifest.clone())
-                .header("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-                .header("Content-Length", content_length)
-                .send()
+        for tag in vec![
+            repo_info.reference.tag().unwrap_or("latest"),
+            &sha256_hash.clone()[..6].to_string(),
+        ] {
+            let resp = self
+                .client
+                .execute(
+                    RequestBuilder::from_parts(
+                        self.client.clone(),
+                        repo_info.upload_manifest_request(tag),
+                    )
+                    .body(serialized_manifest.clone())
+                    .header("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+                    .header("Content-Length", content_length)
+                    .build()
+                    .unwrap(),
+                )
                 .await
                 .unwrap();
             assert!(resp.status() == 201);
