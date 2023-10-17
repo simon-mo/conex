@@ -24,6 +24,14 @@ struct Args {
         help = "Number of jobs to run in parallel, default to number of cores"
     )]
     jobs: Option<usize>,
+
+    #[clap(
+        long,
+        short,
+        help = "Show progress bar, default to true",
+        default_value = "true"
+    )]
+    progress: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -54,10 +62,12 @@ async fn main() {
     let jobs = args.jobs.unwrap_or_else(num_cpus::get);
     info!("Running with {} threads in parallel", jobs);
 
+    let show_progress = args.progress;
+
     match args.command {
         Commands::Push { name } => {
             let pusher = ContainerPusher::new(docker);
-            pusher.push(name, jobs).await;
+            pusher.push(name, jobs, show_progress).await;
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);

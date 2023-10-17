@@ -53,7 +53,8 @@ impl RepoInfo {
                 protocol,
                 domain,
                 reference
-                    .port().map(|p| format!(":{}", p))
+                    .port()
+                    .map(|p| format!(":{}", p))
                     .unwrap_or("".to_string())
             ),
             None => {
@@ -197,10 +198,12 @@ impl ContainerPusher {
             client: Client::new(),
         }
     }
-    pub async fn push(&self, source_image: String, jobs: usize) {
+    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool) {
         let repo_info = RepoInfo::from_string(source_image.clone()).await;
 
-        let mut layer_descriptors = self.push_blobs(repo_info.clone(), jobs).await;
+        let mut layer_descriptors = self
+            .push_blobs(repo_info.clone(), jobs, show_progress)
+            .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
         layer_descriptors.reverse();
         let config_descriptor = self
@@ -328,8 +331,10 @@ impl ContainerPusher {
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
 
-        for tag in &[repo_info.reference.tag().unwrap_or("latest"),
-            &sha256_hash.clone()[..6]] {
+        for tag in &[
+            repo_info.reference.tag().unwrap_or("latest"),
+            &sha256_hash.clone()[..6],
+        ] {
             let resp = self
                 .client
                 .execute(
@@ -349,7 +354,12 @@ impl ContainerPusher {
         }
     }
 
-    pub async fn push_blobs(&self, repo_info: RepoInfo, jobs: usize) -> Vec<Descriptor> {
+    pub async fn push_blobs(
+        &self,
+        repo_info: RepoInfo,
+        jobs: usize,
+        show_progress: bool,
+    ) -> Vec<Descriptor> {
         let image_info = self
             .docker
             .inspect_image(&repo_info.raw_tag)
@@ -410,9 +420,7 @@ impl ContainerPusher {
         let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx);
         let upload_task = tokio::spawn(async move { uploader.upload(plan, jobs).await });
 
-        let pbar_enabled = false;
-
-        if pbar_enabled {
+        if show_progress {
             let bars = layers_to_size
                 .into_iter()
                 .map(|(layer_id, total_size)| {

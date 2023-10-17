@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::vec;
 use tar::{Builder as TarBuilder, EntryType, Header};
-use tracing::info;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 
