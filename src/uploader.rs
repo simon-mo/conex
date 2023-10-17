@@ -161,12 +161,6 @@ async fn upload_layer(
                         // .body(send_buffer[0..buf_len].to_vec())
                         .body(reqwest::Body::wrap_stream(streamer));
 
-                    info!(
-                        "Chunk range {}-{}",
-                        start_offset,
-                        start_offset + buf_len - 1
-                    );
-
                     if let Some(token) = repo_info.auth_token.as_ref() {
                         req.header("Authorization", token).build().unwrap()
                     } else {

@@ -53,8 +53,7 @@ impl RepoInfo {
                 protocol,
                 domain,
                 reference
-                    .port()
-                    .and_then(|p| Some(format!(":{}", p)))
+                    .port().map(|p| format!(":{}", p))
                     .unwrap_or("".to_string())
             ),
             None => {
@@ -79,7 +78,7 @@ impl RepoInfo {
                 let auth = config["auths"]["https://index.docker.io/v1/"]["auth"]
                     .as_str()
                     .unwrap();
-                let auth = data_encoding::BASE64.decode(&auth.as_bytes()).unwrap();
+                let auth = data_encoding::BASE64.decode(auth.as_bytes()).unwrap();
                 let auth = String::from_utf8(auth).unwrap();
                 let auth = auth.split(':').collect::<Vec<_>>();
 
@@ -329,10 +328,8 @@ impl ContainerPusher {
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
 
-        for tag in vec![
-            repo_info.reference.tag().unwrap_or("latest"),
-            &sha256_hash.clone()[..6].to_string(),
-        ] {
+        for tag in &[repo_info.reference.tag().unwrap_or("latest"),
+            &sha256_hash.clone()[..6]] {
             let resp = self
                 .client
                 .execute(
