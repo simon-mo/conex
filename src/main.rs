@@ -77,7 +77,7 @@ async fn main() {
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);
-            let puller = ContainerPuller::new(docker, BLOB_LOCATION.into());
+            let puller = ContainerPuller::new(BLOB_LOCATION.into());
             puller.pull(name, jobs, show_progress).await;
         }
         Commands::Snapshotter { name } => {

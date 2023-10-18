@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::{io::Read, path::Path};
 
-use bollard::Docker;
 use futures::stream::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use oci_spec::image::{Descriptor, ImageConfiguration, ImageManifest, MediaType};
@@ -150,14 +149,14 @@ async fn download_layer(
                     // info!("Handling regular file {:?}", &path);
                     let full_path = Path::new(&unpack_to.clone()).join(path);
                     let file_parent_dir = full_path.parent().unwrap();
-                    std::fs::create_dir_all(&file_parent_dir).unwrap();
+                    std::fs::create_dir_all(file_parent_dir).unwrap();
 
                     // TODO: set the actual mode
                     use std::os::unix::fs::OpenOptionsExt;
                     let mut file = std::fs::OpenOptions::new()
                         .create(true)
                         .write(true)
-                        .mode(777)
+                        .mode(0o777)
                         .open(&full_path)
                         .unwrap();
                     std::io::copy(&mut entry, &mut file).unwrap();
@@ -189,20 +188,18 @@ async fn download_layer(
 }
 
 pub struct ContainerPuller {
-    docker: Docker,
     client: Client,
     blob_store_path: PathBuf,
 }
 
 impl ContainerPuller {
-    pub fn new(docker: Docker, blob_store_path: PathBuf) -> Self {
+    pub fn new(blob_store_path: PathBuf) -> Self {
         // ensure blob_store_path is a directory, create if not exists
         if !blob_store_path.exists() {
             std::fs::create_dir_all(&blob_store_path).unwrap();
         }
 
         Self {
-            docker,
             client: Client::new(),
             blob_store_path,
         }
@@ -212,7 +209,7 @@ impl ContainerPuller {
         let repo_info = RepoInfo::from_string(image_tag).await;
 
         let manifest = self.download_manifest(&repo_info).await;
-        let _config = self.download_config(&repo_info, &manifest.config()).await;
+        let _config = self.download_config(&repo_info, manifest.config()).await;
         self.download_layers(&repo_info, manifest.layers(), jobs, show_progress)
             .await;
     }
@@ -223,8 +220,8 @@ impl ContainerPuller {
             .execute(repo_info.get_manifest_request())
             .await
             .unwrap();
-        let manifest = manifest.json::<ImageManifest>().await.unwrap();
-        manifest
+
+        manifest.json::<ImageManifest>().await.unwrap()
     }
 
     async fn download_config(
@@ -243,15 +240,15 @@ impl ContainerPuller {
             unimplemented!("redirect is not supported yet");
         } else {
             assert!(config.status() == 200, "config status: {}", config.status());
-            let config = config.json::<ImageConfiguration>().await.unwrap();
-            config
+
+            config.json::<ImageConfiguration>().await.unwrap()
         }
     }
 
     async fn download_layers(
         &self,
         repo_info: &RepoInfo,
-        descriptors: &Vec<Descriptor>,
+        descriptors: &[Descriptor],
         jobs: usize,
         show_progress: bool,
     ) {
@@ -284,7 +281,7 @@ impl ContainerPuller {
         drop(progress_tx);
         if show_progress {
             let bars = descriptors
-                .into_iter()
+                .iter()
                 .map(|desc| {
                     let pbar = m.add(indicatif::ProgressBar::new(0));
                     pbar.set_style(sty.clone());
