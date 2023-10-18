@@ -1,12 +1,16 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::{io::Read, path::Path};
 
 use bollard::Docker;
 use futures::stream::TryStreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use oci_spec::image::{Descriptor, ImageConfiguration, ImageManifest, MediaType};
 use reqwest::Client;
-use tracing::{info, warn};
+use tracing::debug;
 
+use crate::progress::{AsyncProgressReader, UpdateItem, UpdateType};
 use crate::repo_info::RepoInfo;
 
 pub struct BlockingReader<T>
@@ -51,6 +55,7 @@ async fn download_layer(
     blob_store_path: PathBuf,
     repo_info: RepoInfo,
     descriptor: Descriptor,
+    progress_tx: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 ) {
     assert!(
         descriptor.media_type() == &MediaType::ImageLayerZstd,
@@ -77,7 +82,7 @@ async fn download_layer(
     // TODO: if the location is not empty, we should check it has the entirity of the content
     // but for now, let's clean it up and download again.
     if unpack_location.exists() {
-        warn!("{} already exists, removing", unpack_location.display());
+        debug!("{} already exists, removing", unpack_location.display());
         std::fs::remove_dir_all(&unpack_location).unwrap();
     }
     std::fs::create_dir_all(&unpack_location).unwrap();
@@ -91,8 +96,11 @@ async fn download_layer(
     let (mut write_decoded, mut read_decoded) = decode_to_untar_buff.split();
 
     let mut work_set = tokio::task::JoinSet::new();
+    let progress_key = digest.clone();
     work_set.spawn(async move {
-        let bufreader = tokio::io::BufReader::with_capacity(64 * 1024, read_raw);
+        let progress_reader =
+            AsyncProgressReader::new(read_raw, progress_key, UpdateType::SocketRecv, progress_tx);
+        let bufreader = tokio::io::BufReader::with_capacity(64 * 1024, progress_reader);
         let mut reader = async_compression::tokio::bufread::ZstdDecoder::new(bufreader);
         tokio::io::copy(&mut reader, &mut write_decoded)
             .await
@@ -111,7 +119,7 @@ async fn download_layer(
 
             match entry.header().entry_type() {
                 tar::EntryType::Directory => {
-                    info!("Creating directory {}", &path);
+                    // info!("Creating directory {}", &path);
                     let path = Path::new(&unpack_to).join(path.clone());
                     std::fs::create_dir_all(&path).unwrap();
                     continue;
@@ -124,7 +132,7 @@ async fn download_layer(
                     // this we are writing the target_path "as is".
 
                     // let target_path = Path::new(&unpack_to).join(target_path);
-                    info!("Creating symlink {:?} -> {:?}", &path, &target_path);
+                    // info!("Creating symlink {:?} -> {:?}", &path, &target_path);
                     std::os::unix::fs::symlink(&target_path, &path).unwrap();
                     continue;
                 }
@@ -134,12 +142,12 @@ async fn download_layer(
                     let target_path = Path::new(&unpack_to).join(target_path);
                     // the target_path should already exist in the same archive.
                     assert!(target_path.is_file(), "{:?}", target_path.display());
-                    info!("Creating hard link {:?} -> {:?}", &path, &target_path);
+                    // info!("Creating hard link {:?} -> {:?}", &path, &target_path);
                     std::fs::hard_link(&target_path, &path).unwrap();
                     continue;
                 }
                 tar::EntryType::Regular => {
-                    info!("Handling regular file {:?}", &path);
+                    // info!("Handling regular file {:?}", &path);
                     let full_path = Path::new(&unpack_to.clone()).join(path);
                     let file_parent_dir = full_path.parent().unwrap();
                     std::fs::create_dir_all(&file_parent_dir).unwrap();
@@ -172,7 +180,7 @@ async fn download_layer(
     }
     untar_thread.await.unwrap();
 
-    info!(
+    debug!(
         "Fetched {} in {:.3}s, {:.2}mb",
         digest,
         start.elapsed().as_millis() as f64 / 1e3,
@@ -250,18 +258,52 @@ impl ContainerPuller {
         let mut tasks = tokio::task::JoinSet::new();
         let sema = std::sync::Arc::new(tokio::sync::Semaphore::new(jobs));
 
+        // TODO: move this to shared code with puller later.
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<UpdateItem>();
+        let m = Arc::new(MultiProgress::with_draw_target(
+            ProgressDrawTarget::stdout_with_hz(20),
+        ));
+        let sty = ProgressStyle::with_template("{spinner:.green} ({msg}) [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes:>12}/{total_bytes:>12} ({bytes_per_sec:>15}, {eta:>5})")
+                .unwrap()
+                .progress_chars("#>-");
+
         descriptors.iter().for_each(|descriptor| {
             let client = self.client.clone();
             let blob_store_path = self.blob_store_path.clone();
             let repo_info = repo_info.clone();
             let descriptor = descriptor.clone();
             let sema = sema.clone();
+            let progress_tx = progress_tx.clone();
 
             tasks.spawn(async move {
                 let _ = sema.acquire().await.unwrap();
-                download_layer(client, blob_store_path, repo_info, descriptor).await;
+                download_layer(client, blob_store_path, repo_info, descriptor, progress_tx).await;
             });
         });
+
+        drop(progress_tx);
+        if show_progress {
+            let bars = descriptors
+                .into_iter()
+                .map(|desc| {
+                    let pbar = m.add(indicatif::ProgressBar::new(0));
+                    pbar.set_style(sty.clone());
+                    pbar.set_message(desc.digest().clone());
+                    pbar.set_length(desc.size() as u64);
+                    (desc.digest().to_owned(), pbar)
+                })
+                .collect::<HashMap<String, ProgressBar>>();
+
+            while let Some(item) = progress_rx.recv().await {
+                if item.update_type == UpdateType::TarAdd {
+                    let pbar = bars.get(&item.key).unwrap();
+                    pbar.inc(item.delta as u64);
+                }
+            }
+
+            // Completed, close the progress bars.
+            bars.values().for_each(|pbar| pbar.finish());
+        }
 
         while let Some(res) = tasks.join_next().await {
             res.unwrap();

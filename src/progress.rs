@@ -11,6 +11,7 @@ use futures_core::Stream;
 pub enum UpdateType {
     TarAdd,
     SocketSend,
+    SocketRecv,
 }
 pub struct UpdateItem {
     pub key: String, // TODO: change to CoW
@@ -56,6 +57,48 @@ impl<T: std::io::Write> std::io::Write for ProgressWriter<T> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
+    }
+}
+
+pub struct AsyncProgressReader<T: tokio::io::AsyncRead + Unpin> {
+    inner: T,
+    key: String,
+    update_type: UpdateType,
+    progress_tx: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+}
+
+impl<T: tokio::io::AsyncRead + Unpin> AsyncProgressReader<T> {
+    pub fn new(
+        inner: T,
+        key: String,
+        update_type: UpdateType,
+        progress_tx: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+    ) -> Self {
+        Self {
+            inner,
+            key,
+            update_type,
+            progress_tx,
+        }
+    }
+}
+
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for AsyncProgressReader<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut tokio::io::ReadBuf,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        futures_core::ready!(Pin::new(&mut this.inner).poll_read(cx, buf))?;
+        this.progress_tx
+            .send(UpdateItem {
+                key: this.key.clone(),
+                delta: buf.filled().len(),
+                update_type: this.update_type.clone(),
+            })
+            .unwrap();
+        Poll::Ready(Ok(()))
     }
 }
 
