@@ -1,12 +1,15 @@
 mod hash;
 mod planner;
 mod progress;
+mod puller;
 mod pusher;
 mod reference;
+mod repo_info;
 mod uploader;
 
 use bollard::Docker;
 use clap::{Parser, Subcommand};
+use puller::ContainerPuller;
 use pusher::ContainerPusher;
 use tracing::info;
 
@@ -38,10 +41,12 @@ struct Args {
 enum Commands {
     Push { name: String },
 
-    Pull { name: Option<String> },
+    Pull { name: String },
 
     Snapshotter { name: Option<String> },
 }
+
+const BLOB_LOCATION: &str = "/tmp/conex-blob-store";
 
 #[tokio::main]
 async fn main() {
@@ -66,11 +71,14 @@ async fn main() {
 
     match args.command {
         Commands::Push { name } => {
+            println!("Pushing container: {:?}", name);
             let pusher = ContainerPusher::new(docker);
             pusher.push(name, jobs, show_progress).await;
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);
+            let puller = ContainerPuller::new(docker, BLOB_LOCATION.into());
+            puller.pull(name, jobs, show_progress).await;
         }
         Commands::Snapshotter { name } => {
             println!("Snapshotting container: {:?}", name);

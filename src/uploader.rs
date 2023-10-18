@@ -1,7 +1,7 @@
 use crate::hash::StreamingHashWriter;
 use crate::planner::ConexFile;
 use crate::progress::{ProgressStreamer, ProgressWriter, UpdateItem};
-use crate::pusher::RepoInfo;
+use crate::repo_info::RepoInfo;
 use bytes::Bytes;
 use oci_spec::image::Descriptor;
 use reqwest::Client;
@@ -69,6 +69,7 @@ async fn upload_layer(
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
                     header.set_metadata(meta);
+                    header.set_size(0);
                     header.set_entry_type(EntryType::Link);
                     tar_builder
                         .append_link(&mut header, file.relative_path, hard_link_to)

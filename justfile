@@ -47,3 +47,6 @@ test-real-push-alpine:
     docker pull alpine
     docker tag alpine simonmok/alpine
     cargo run -- push simonmok/alpine
+
+test-pull-local:
+    cargo run -- --jobs 1 pull localhost:5000/workload
