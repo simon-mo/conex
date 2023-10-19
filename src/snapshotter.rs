@@ -119,8 +119,8 @@ impl snapshots::Snapshotter for SkySnapshotter {
 
                 let overylay_dir = Path::new(&self.mount_dir).join(
                     key.replace('/', "-")
-                        .replace(":", "-")
-                        .split(" ")
+                        .replace(':', "-")
+                        .split(' ')
                         .next()
                         .unwrap(),
                 );
@@ -353,17 +353,12 @@ impl snapshots::Snapshotter for SkySnapshotter {
             store.upsert_info(info);
 
             // move the directory from the mount dir to snapshot dir
-            let mut src = Path::new(&self.mount_dir).join(
-                key.replace('/', "-")
-                    .replace(":", "-")
-                    .split(" ")
-                    .next()
-                    .unwrap(),
-            );
+            let mut src = Path::new(&self.mount_dir)
+                .join(key.replace(['/', ':'], "-").split(' ').next().unwrap());
             if src.join("fs").exists() {
                 src.push("fs");
             }
-            let sha = name.split("/").last().unwrap().replace("sha256:", "");
+            let sha = name.split('/').last().unwrap().replace("sha256:", "");
             let dst = Path::new(&self.snapshot_dir).join(&sha);
             std::fs::rename(src, dst).unwrap();
 

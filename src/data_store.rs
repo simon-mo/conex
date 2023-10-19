@@ -228,8 +228,10 @@ mod tests {
     #[test]
     fn test_insert_and_find_info_by_name() {
         let mut store = _new_store();
-        let mut info = Info::default();
-        info.name = "test_name".to_string();
+        let mut info = Info {
+            name: "test_name".to_string(),
+            ..Default::default()
+        };
         store.upsert_info(info);
 
         let result = store.find_info_by_name("test_name");

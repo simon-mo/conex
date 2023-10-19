@@ -135,58 +135,56 @@ async fn download_layer(
 
         for entry in tar.entries().unwrap() {
             let mut entry = entry.unwrap();
-            let path = entry.path().unwrap().display().to_string();
-
             entry.unpack_in(&unpack_to).unwrap();
-            continue;
 
-            match entry.header().entry_type() {
-                tar::EntryType::Directory => {
-                    // info!("Creating directory {}", &path);
-                    let path = Path::new(&unpack_to).join(path.clone());
-                    std::fs::create_dir_all(&path).unwrap();
-                    continue;
-                }
-                tar::EntryType::Symlink => {
-                    let target_path = entry.link_name().unwrap().unwrap().display().to_string();
-                    let path = Path::new(&unpack_to).join(path.clone());
+            // let path = entry.path().unwrap().display().to_string();
+            // match entry.header().entry_type() {
+            //     tar::EntryType::Directory => {
+            //         // info!("Creating directory {}", &path);
+            //         let path = Path::new(&unpack_to).join(path.clone());
+            //         std::fs::create_dir_all(&path).unwrap();
+            //         continue;
+            //     }
+            //     tar::EntryType::Symlink => {
+            //         let target_path = entry.link_name().unwrap().unwrap().display().to_string();
+            //         let path = Path::new(&unpack_to).join(path.clone());
 
-                    // symlink should point to an "abosolute" path as seen in the layer.
-                    // this we are writing the target_path "as is".
+            //         // symlink should point to an "abosolute" path as seen in the layer.
+            //         // this we are writing the target_path "as is".
 
-                    // let target_path = Path::new(&unpack_to).join(target_path);
-                    // info!("Creating symlink {:?} -> {:?}", &path, &target_path);
-                    std::os::unix::fs::symlink(&target_path, &path).unwrap();
-                    continue;
-                }
-                tar::EntryType::Link => {
-                    let target_path = entry.link_name().unwrap().unwrap().display().to_string();
-                    let path: std::path::PathBuf = Path::new(&unpack_to).join(path.clone());
-                    let target_path = Path::new(&unpack_to).join(target_path);
-                    // the target_path should already exist in the same archive.
-                    assert!(target_path.is_file(), "{:?}", target_path.display());
-                    // info!("Creating hard link {:?} -> {:?}", &path, &target_path);
-                    std::fs::hard_link(&target_path, &path).unwrap();
-                    continue;
-                }
-                tar::EntryType::Regular => {
-                    // info!("Handling regular file {:?}", &path);
-                    let full_path = Path::new(&unpack_to.clone()).join(path);
-                    let file_parent_dir = full_path.parent().unwrap();
-                    std::fs::create_dir_all(file_parent_dir).unwrap();
+            //         // let target_path = Path::new(&unpack_to).join(target_path);
+            //         // info!("Creating symlink {:?} -> {:?}", &path, &target_path);
+            //         std::os::unix::fs::symlink(&target_path, &path).unwrap();
+            //         continue;
+            //     }
+            //     tar::EntryType::Link => {
+            //         let target_path = entry.link_name().unwrap().unwrap().display().to_string();
+            //         let path: std::path::PathBuf = Path::new(&unpack_to).join(path.clone());
+            //         let target_path = Path::new(&unpack_to).join(target_path);
+            //         // the target_path should already exist in the same archive.
+            //         assert!(target_path.is_file(), "{:?}", target_path.display());
+            //         // info!("Creating hard link {:?} -> {:?}", &path, &target_path);
+            //         std::fs::hard_link(&target_path, &path).unwrap();
+            //         continue;
+            //     }
+            //     tar::EntryType::Regular => {
+            //         // info!("Handling regular file {:?}", &path);
+            //         let full_path = Path::new(&unpack_to.clone()).join(path);
+            //         let file_parent_dir = full_path.parent().unwrap();
+            //         std::fs::create_dir_all(file_parent_dir).unwrap();
 
-                    // TODO: set the actual mode
-                    use std::os::unix::fs::OpenOptionsExt;
-                    let mut file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .mode(0o777)
-                        .open(&full_path)
-                        .unwrap();
-                    std::io::copy(&mut entry, &mut file).unwrap();
-                }
-                _ => {}
-            }
+            //         // TODO: set the actual mode
+            //         use std::os::unix::fs::OpenOptionsExt;
+            //         let mut file = std::fs::OpenOptions::new()
+            //             .create(true)
+            //             .write(true)
+            //             .mode(0o777)
+            //             .open(&full_path)
+            //             .unwrap();
+            //         std::io::copy(&mut entry, &mut file).unwrap();
+            //     }
+            //     _ => {}
+            // }
         }
     });
 
