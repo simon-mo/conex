@@ -1,3 +1,4 @@
+mod data_store;
 mod hash;
 mod planner;
 mod progress;

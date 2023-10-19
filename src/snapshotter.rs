@@ -2,7 +2,6 @@ use containerd_snapshots as snapshots;
 use containerd_snapshots::{api, Info, Usage};
 use snapshots::tonic::transport::Server;
 use snapshots::Kind;
-use std::collections::HashSet;
 use std::path::Path;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
@@ -17,12 +16,8 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tokio_stream::Stream;
 use tracing::info;
 
+use crate::data_store::DataStore;
 use crate::puller::ContainerPuller;
-
-fn clone_info_hack(info: &Info) -> Info {
-    // a hack because the Info doesn't have copy trait
-    serde_json::from_str(&serde_json::to_string(info).unwrap()).unwrap()
-}
 
 pub struct WalkStream {
     pub infos: Vec<Info>,
@@ -45,24 +40,6 @@ impl Stream for WalkStream {
     }
 }
 
-struct DataStore {
-    info_vec: Vec<Info>,
-    key_to_sha_map: HashMap<String, String>,
-    key_to_mount: HashMap<String, api::types::Mount>,
-    sha_fetched: HashSet<String>,
-}
-
-impl DataStore {
-    async fn new() -> Self {
-        DataStore {
-            info_vec: Vec::new(),
-            key_to_sha_map: HashMap::new(),
-            key_to_mount: HashMap::new(),
-            sha_fetched: HashSet::new(),
-        }
-    }
-}
-
 struct SkySnapshotter {
     data_store: Arc<Mutex<DataStore>>,
     snapshot_dir: String,
@@ -72,7 +49,7 @@ struct SkySnapshotter {
 impl SkySnapshotter {
     async fn new(snapshot_dir: String, mount_dir: String) -> Self {
         SkySnapshotter {
-            data_store: Arc::new(Mutex::new(DataStore::new().await)),
+            data_store: Arc::new(Mutex::new(DataStore::new())),
             snapshot_dir,
             mount_dir,
         }
@@ -88,16 +65,16 @@ impl Debug for SkySnapshotter {
 impl SkySnapshotter {
     async fn prefetch_image(&self, image_ref: String) {
         let puller = ContainerPuller::new(self.snapshot_dir.clone().into());
-        let skip_layers = { self.data_store.lock().await.sha_fetched.clone() };
+        let skip_layers = { self.data_store.lock().await.get_all_sha_fetched() };
         let layers_fetched = puller
-            .pull(image_ref, num_cpus::get(), false, Some(skip_layers))
+            .pull(image_ref, num_cpus::get(), true, Some(skip_layers))
             .await;
 
         // Add to data store
         {
             let mut store = self.data_store.lock().await;
             for layer in layers_fetched {
-                store.sha_fetched.insert(layer);
+                store.insert_sha_fetched(layer)
             }
         }
     }
@@ -132,11 +109,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
 
                 let mut parent = parent;
                 while !parent.is_empty() {
-                    let parent_info = store
-                        .info_vec
-                        .iter()
-                        .find(|info| info.name == parent)
-                        .unwrap();
+                    let parent_info = store.find_info_by_name(&parent).unwrap();
                     keys.push(parent_info.name.clone());
                     parent = parent_info.parent.clone();
                 }
@@ -147,7 +120,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 let mut lower_dirs = lower_dir_keys
                     .iter()
                     .map(|key| {
-                        let sha = store.key_to_sha_map.get(key).unwrap_or_else(|| panic!("can't find the corresponding sha for key={}, this shouldn't happen.",
+                        let sha = store.find_sha_by_key(key).unwrap_or_else(|| panic!("can't find the corresponding sha for key={}, this shouldn't happen.",
                             key));
                         let dir = format!("{}/{}", self.snapshot_dir, sha);
                         assert!(std::path::Path::new(&dir).is_dir());
@@ -190,13 +163,13 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 );
                 mount_vec.push(mount.clone());
 
-                store.info_vec.push(Info {
+                store.insert_info(Info {
                     name: key.clone(),
                     parent,
                     kind: Kind::Active,
                     ..Default::default()
                 });
-                store.key_to_mount.insert(key.clone(), mount);
+                store.insert_mount(key.clone(), mount);
             }
             return Ok(mount_vec);
         }
@@ -209,7 +182,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
 
         let layer_exists = {
             let store = self.data_store.lock().await;
-            if store.sha_fetched.contains(layer_ref.as_str()) {
+            if store.is_sha_fetched(layer_ref.as_str()) {
                 info!("{} already fetched, skipping", layer_ref);
                 true
             } else {
@@ -223,9 +196,9 @@ impl snapshots::Snapshotter for SkySnapshotter {
 
         {
             let mut store = self.data_store.lock().await;
-            assert!(store.sha_fetched.contains(layer_ref.as_str()));
-            store.key_to_sha_map.insert(key.clone(), layer_ref.clone());
-            store.info_vec.push(Info {
+            assert!(store.is_sha_fetched(layer_ref.as_str()));
+            store.insert_key_to_sha(key.clone(), layer_ref.clone());
+            store.insert_info(Info {
                 kind: Kind::Committed,
                 name: key.clone(),
                 parent,
@@ -251,8 +224,8 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 self.data_store
                     .lock()
                     .await
-                    .info_vec
-                    .iter()
+                    .get_all_info()
+                    .into_iter()
                     .filter(|info| {
                         for filters_ in filters.clone() {
                             for filter in filters_.as_str().split(',') {
@@ -275,7 +248,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
                         }
                         true
                     })
-                    .map(clone_info_hack)
+                    .collect::<Vec<Info>>()
             );
         }
         info!(
@@ -290,16 +263,9 @@ impl snapshots::Snapshotter for SkySnapshotter {
     #[tracing::instrument(level = "info")]
     async fn stat(&self, key: String) -> Result<Info, Self::Error> {
         info!("Stat: {}", key);
-        self.data_store
-            .lock()
-            .await
-            .info_vec
-            .iter()
-            .find(|info| info.name == key)
-            .map(clone_info_hack)
-            .ok_or(snapshots::tonic::Status::not_found(
-                "Not found from skysnaphotter",
-            ))
+        self.data_store.lock().await.find_info_by_name(&key).ok_or(
+            snapshots::tonic::Status::not_found("Not found from skysnaphotter"),
+        )
     }
 
     async fn update(
@@ -314,8 +280,8 @@ impl snapshots::Snapshotter for SkySnapshotter {
 
     async fn usage(&self, key: String) -> Result<Usage, Self::Error> {
         info!("Usage: {}", key);
-        todo!();
-        // Ok(Usage::default())
+        // todo!();
+        Ok(Usage::default())
     }
 
     #[tracing::instrument(level = "info")]
@@ -323,7 +289,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
         info!("Mounts: {}", key);
         {
             let store = self.data_store.lock().await;
-            if let Some(mount) = store.key_to_mount.get(&key) {
+            if let Some(mount) = store.find_mount_by_key(key.as_str()) {
                 return Ok(vec![mount.clone()]);
             } else {
                 return Err(snapshots::tonic::Status::not_found(
