@@ -7,10 +7,11 @@ use futures::stream::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use oci_spec::image::{Descriptor, ImageConfiguration, ImageManifest, MediaType};
 use reqwest::Client;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::progress::{AsyncProgressReader, UpdateItem, UpdateType};
 use crate::repo_info::RepoInfo;
+use crate::{BLOB_LOCATION, MOUNT_LOCATION};
 
 pub struct BlockingReader<T>
 where
@@ -212,6 +213,12 @@ impl ContainerPuller {
         let _config = self.download_config(&repo_info, manifest.config()).await;
         self.download_layers(&repo_info, manifest.layers(), jobs, show_progress)
             .await;
+
+        let mount_cmd = self.make_overlay_command(&manifest.layers());
+        info!("Created the following command to mount the image:");
+        info!("{}", mount_cmd);
+
+        // docker run --rm --mount type=bind,source=/tmp/conex-mount/flying-aphid/merged,target=/conex busybox chroot /conex ls -lh
     }
 
     async fn download_manifest(&self, repo_info: &RepoInfo) -> ImageManifest {
@@ -220,6 +227,12 @@ impl ContainerPuller {
             .execute(repo_info.get_manifest_request())
             .await
             .unwrap();
+
+        assert!(
+            manifest.status() == 200,
+            "manifest response:{}",
+            manifest.text().await.unwrap()
+        );
 
         manifest.json::<ImageManifest>().await.unwrap()
     }
@@ -305,5 +318,57 @@ impl ContainerPuller {
         while let Some(res) = tasks.join_next().await {
             res.unwrap();
         }
+    }
+
+    fn make_overlay_command(&self, layers: &[Descriptor]) -> String {
+        let blob_path = PathBuf::from(BLOB_LOCATION);
+        let mount_path = PathBuf::from(MOUNT_LOCATION);
+
+        let mount_dir = {
+            let p = mount_path.join(petname::petname(2, "-"));
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+
+        let lower_dirs = layers
+            .iter()
+            .map(|desc| {
+                blob_path
+                    .join(desc.digest().replace("sha256:", ""))
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .rev()
+            .collect::<Vec<String>>()
+            .join(":");
+        let upper_dir = {
+            let p = mount_dir.join("upper");
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+        let work_dir = {
+            let p = mount_dir.join("work");
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+        let merged_dir = {
+            let p = mount_dir.join("merged");
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+
+        let mut options: Vec<String> = vec![];
+        options.push("index=off".to_string());
+        options.push("userxattr".to_string());
+        options.push(format!("upperdir={}", upper_dir.to_str().unwrap()));
+        options.push(format!("workdir={}", work_dir.to_str().unwrap()));
+        options.push(format!("lowerdir={}", lower_dirs));
+
+        format!(
+            "sudo mount -t overlay overlay -o {} {}",
+            options.join(","),
+            merged_dir.to_str().unwrap()
+        )
     }
 }

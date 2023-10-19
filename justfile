@@ -50,3 +50,6 @@ test-real-push-alpine:
 
 test-pull-local:
     cargo run -- --jobs 1 pull localhost:5000/workload
+
+test-pull-hub:
+    cargo run -- --jobs 1 pull simonmok/workload

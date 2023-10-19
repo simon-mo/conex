@@ -5,12 +5,14 @@ mod puller;
 mod pusher;
 mod reference;
 mod repo_info;
+mod snapshotter;
 mod uploader;
 
 use bollard::Docker;
 use clap::{Parser, Subcommand};
 use puller::ContainerPuller;
 use pusher::ContainerPusher;
+use snapshotter::serve_snapshotter;
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -43,10 +45,16 @@ enum Commands {
 
     Pull { name: String },
 
-    Snapshotter { name: Option<String> },
+    Snapshotter {},
 }
 
 const BLOB_LOCATION: &str = "/tmp/conex-blob-store";
+const MOUNT_LOCATION: &str = "/tmp/conex-mount";
+
+fn ensure_conex_dirs() {
+    std::fs::create_dir_all(BLOB_LOCATION).unwrap();
+    std::fs::create_dir_all(MOUNT_LOCATION).unwrap();
+}
 
 #[tokio::main]
 async fn main() {
@@ -77,11 +85,14 @@ async fn main() {
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);
+            ensure_conex_dirs();
             let puller = ContainerPuller::new(BLOB_LOCATION.into());
             puller.pull(name, jobs, show_progress).await;
         }
-        Commands::Snapshotter { name } => {
-            println!("Snapshotting container: {:?}", name);
+        Commands::Snapshotter {} => {
+            println!("Running snapshotter");
+            ensure_conex_dirs();
+            serve_snapshotter().await;
         }
     }
 }
