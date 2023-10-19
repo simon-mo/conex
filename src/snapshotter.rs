@@ -47,9 +47,9 @@ struct SkySnapshotter {
 }
 
 impl SkySnapshotter {
-    async fn new(snapshot_dir: String, mount_dir: String) -> Self {
+    async fn new(snapshot_dir: String, mount_dir: String, metadata_db_path: String) -> Self {
         SkySnapshotter {
-            data_store: Arc::new(Mutex::new(DataStore::new())),
+            data_store: Arc::new(Mutex::new(DataStore::new(metadata_db_path))),
             snapshot_dir,
             mount_dir,
         }
@@ -84,7 +84,7 @@ impl SkySnapshotter {
 impl snapshots::Snapshotter for SkySnapshotter {
     type Error = snapshots::tonic::Status;
 
-    #[tracing::instrument(level = "info", skip(self, labels))]
+    //#[tracing::instrument(level = "info", skip(self, labels))]
     async fn prepare(
         &self,
         key: String,
@@ -107,54 +107,75 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 let mut store = self.data_store.lock().await;
                 let mut keys = vec![key.clone()];
 
-                let mut parent = parent;
-                while !parent.is_empty() {
-                    let parent_info = store.find_info_by_name(&parent).unwrap();
+                let mut parent_walk = parent.clone();
+                while !parent_walk.is_empty() {
+                    let parent_info = store.find_info_by_name(&parent_walk).unwrap();
                     keys.push(parent_info.name.clone());
-                    parent = parent_info.parent.clone();
+                    parent_walk = parent_info.parent.clone();
                 }
                 info!("Preparing an overlay fs for keys: {:?}", keys);
 
                 let lower_dir_keys = &keys[1..];
-                assert!(!lower_dir_keys.is_empty());
-                let mut lower_dirs = lower_dir_keys
-                    .iter()
-                    .map(|key| {
-                        let sha = store.find_sha_by_key(key).unwrap_or_else(|| panic!("can't find the corresponding sha for key={}, this shouldn't happen.",
-                            key));
-                        let dir = format!("{}/{}", self.snapshot_dir, sha);
-                        assert!(std::path::Path::new(&dir).is_dir());
-                        dir
-                    })
-                    .filter(|dir| {
-                        std::path::Path::new(dir).is_dir()
-                            && std::fs::read_dir(dir).unwrap().count() > 0
-                    })
-                    .collect::<Vec<String>>();
-                lower_dirs.reverse();
 
-                let overylay_dir = Path::new(&self.mount_dir).join(key.replace('/', "-"));
-                if !overylay_dir.is_dir() {
+                let overylay_dir = Path::new(&self.mount_dir).join(
+                    key.replace('/', "-")
+                        .replace(":", "-")
+                        .split(" ")
+                        .next()
+                        .unwrap(),
+                );
+                if !overylay_dir.exists() {
                     std::fs::create_dir_all(&overylay_dir).unwrap();
                 }
-                let upper_dir = overylay_dir.join("fs");
-                let work_dir = overylay_dir.join("work");
-                std::fs::create_dir(&upper_dir).unwrap();
-                std::fs::create_dir(&work_dir).unwrap();
 
-                let mut options: Vec<String> = vec![];
-                options.push("index=off".to_string());
-                options.push("userxattr".to_string());
-                options.push(format!("upperdir={}", upper_dir.to_str().unwrap()));
-                options.push(format!("workdir={}", work_dir.to_str().unwrap()));
-                options.push(format!("lowerdir={}", lower_dirs.join(":")));
+                let mount = {
+                    if lower_dir_keys.is_empty() {
+                        // bind mount
+                        api::types::Mount {
+                            r#type: "bind".to_string(),
+                            source: overylay_dir.to_string_lossy().to_string(),
+                            options: vec!["rw".to_string(), "rbind".to_string()],
+                            ..Default::default()
+                        }
+                    } else {
+                        // overlay mount
+                        let mut lower_dirs = lower_dir_keys
+                            .iter()
+                            .map(|key| {
+                                let sha = store.find_sha_by_key(key).unwrap_or_else(|| panic!("can't find the corresponding sha for key={}, this shouldn't happen.",
+                                    key));
+                                let dir = format!("{}/{}", self.snapshot_dir, sha);
+                                assert!(std::path::Path::new(&dir).is_dir());
+                                dir
+                            })
+                            .filter(|dir| {
+                                std::path::Path::new(dir).is_dir()
+                                    && std::fs::read_dir(dir).unwrap().count() > 0
+                            })
+                            .collect::<Vec<String>>();
+                        lower_dirs.reverse();
 
-                let mount = api::types::Mount {
-                    r#type: "overlay".to_string(),
-                    source: "overlay".to_string(),
-                    options,
-                    ..Default::default()
+                        let upper_dir = overylay_dir.join("fs");
+                        let work_dir = overylay_dir.join("work");
+                        std::fs::create_dir(&upper_dir).unwrap();
+                        std::fs::create_dir(&work_dir).unwrap();
+
+                        let mut options: Vec<String> = vec![];
+                        // options.push("index=off".to_string());
+                        // options.push("userxattr".to_string());
+                        options.push(format!("upperdir={}", upper_dir.to_str().unwrap()));
+                        options.push(format!("workdir={}", work_dir.to_str().unwrap()));
+                        options.push(format!("lowerdir={}", lower_dirs.join(":")));
+
+                        api::types::Mount {
+                            r#type: "overlay".to_string(),
+                            source: "overlay".to_string(),
+                            options,
+                            ..Default::default()
+                        }
+                    }
                 };
+
                 info!(
                     "Sending mount array: `mount -t {} {} -o{}`",
                     mount.r#type,
@@ -163,7 +184,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 );
                 mount_vec.push(mount.clone());
 
-                store.insert_info(Info {
+                store.upsert_info(Info {
                     name: key.clone(),
                     parent,
                     kind: Kind::Active,
@@ -198,7 +219,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
             let mut store = self.data_store.lock().await;
             assert!(store.is_sha_fetched(layer_ref.as_str()));
             store.insert_key_to_sha(key.clone(), layer_ref.clone());
-            store.insert_info(Info {
+            store.upsert_info(Info {
                 kind: Kind::Committed,
                 name: key.clone(),
                 parent,
@@ -212,7 +233,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
     }
 
     type InfoStream = WalkStream;
-    #[tracing::instrument(level = "info")]
+    //#[tracing::instrument(level = "info")]
     async fn list(
         &self,
         _snapshotter: String,
@@ -227,28 +248,33 @@ impl snapshots::Snapshotter for SkySnapshotter {
                     .get_all_info()
                     .into_iter()
                     .filter(|info| {
-                        for filters_ in filters.clone() {
-                            for filter in filters_.as_str().split(',') {
-                                let [key, value] = filter.split("==").collect::<Vec<&str>>()[..] else {
+                        if filters.is_empty() {
+                            return true;
+                        }
+
+                        info!("Filtering info: {:?}, filters={:?}", info, filters);
+                        assert!(filters.len() == 1);
+                        for filter in filters.iter().next().unwrap().as_str().split(',') {
+                            let [key, value] = filter.split("==").collect::<Vec<&str>>()[..] else {
                                     panic!("Invalid filter {}", filter);
                                 };
-                                if key == "parent" {
-                                    if info.parent != value {
-                                        return false;
-                                    }
-                                } else if key.starts_with("labels") {
-                                    let label_key = key.replace("labels.", "").replace('"', "");
-                                    if info.labels.get(&label_key) != Some(&value.to_string()) {
-                                        return false;
-                                    }
-                                } else {
-                                    panic!("Unknown filter {}", key);
+                            let value = value.replace('"', "");
+                            if key == "parent" {
+                                if info.parent != value {
+                                    return false;
                                 }
+                            } else if key.starts_with("labels") {
+                                let label_key = key.replace("labels.", "").replace('"', "");
+                                if info.labels.get(&label_key) != Some(&value.to_string()) {
+                                    return false;
+                                }
+                            } else {
+                                panic!("Unknown filter {}", key);
                             }
                         }
                         true
                     })
-                    .collect::<Vec<Info>>()
+                    .collect::<Vec<Info>>(),
             );
         }
         info!(
@@ -260,7 +286,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
         Ok(stream)
     }
 
-    #[tracing::instrument(level = "info")]
+    //#[tracing::instrument(level = "info")]
     async fn stat(&self, key: String) -> Result<Info, Self::Error> {
         info!("Stat: {}", key);
         self.data_store.lock().await.find_info_by_name(&key).ok_or(
@@ -284,7 +310,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
         Ok(Usage::default())
     }
 
-    #[tracing::instrument(level = "info")]
+    //#[tracing::instrument(level = "info")]
     async fn mounts(&self, key: String) -> Result<Vec<api::types::Mount>, Self::Error> {
         info!("Mounts: {}", key);
         {
@@ -306,7 +332,9 @@ impl snapshots::Snapshotter for SkySnapshotter {
         labels: HashMap<String, String>,
     ) -> Result<Vec<api::types::Mount>, Self::Error> {
         info!("View: key={}, parent={}, labels={:?}", key, parent, labels);
-        todo!();
+        // Note: this should be a read-only prepare, the separate method is for optimization.
+        self.prepare(key, parent, labels).await
+        // todo!();
         // Ok(Vec::new())
     }
 
@@ -317,8 +345,33 @@ impl snapshots::Snapshotter for SkySnapshotter {
         labels: HashMap<String, String>,
     ) -> Result<(), Self::Error> {
         info!("Commit: name={}, key={}, labels={:?}", name, key, labels);
-        todo!();
-        // Ok(())
+        {
+            let mut store = self.data_store.lock().await;
+            let mut info = store.find_info_by_name(&key).unwrap();
+            info.name = name.clone();
+            info.kind = Kind::Committed;
+            store.upsert_info(info);
+
+            // move the directory from the mount dir to snapshot dir
+            let mut src = Path::new(&self.mount_dir).join(
+                key.replace('/', "-")
+                    .replace(":", "-")
+                    .split(" ")
+                    .next()
+                    .unwrap(),
+            );
+            if src.join("fs").exists() {
+                src.push("fs");
+            }
+            let sha = name.split("/").last().unwrap().replace("sha256:", "");
+            let dst = Path::new(&self.snapshot_dir).join(&sha);
+            std::fs::rename(src, dst).unwrap();
+
+            store.insert_key_to_sha(name, sha.clone());
+            store.insert_sha_fetched(sha.clone());
+        }
+
+        Ok(())
     }
 
     async fn remove(&self, key: String) -> Result<(), Self::Error> {
@@ -328,13 +381,18 @@ impl snapshots::Snapshotter for SkySnapshotter {
     }
 }
 
-pub async fn serve_snapshotter(snapshot_path: String, mount_path: String, socket_path: String) {
+pub async fn serve_snapshotter(
+    snapshot_path: String,
+    mount_path: String,
+    socket_path: String,
+    metadata_db_path: String,
+) {
     // remove socket_path if it exists
     if std::fs::metadata(&socket_path).is_ok() {
         std::fs::remove_file(&socket_path).expect("Failed to remove socket");
     }
 
-    let sky_snapshotter = SkySnapshotter::new(snapshot_path, mount_path).await;
+    let sky_snapshotter = SkySnapshotter::new(snapshot_path, mount_path, metadata_db_path).await;
 
     let incoming = {
         let uds = UnixListener::bind(&socket_path).expect("Failed to bind listener");

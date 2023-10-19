@@ -53,3 +53,18 @@ test-pull-local:
 
 test-pull-hub:
     cargo run -- --jobs 1 pull simonmok/workload
+
+reset-all:
+    cargo build
+    sudo env "PATH=$PATH" ./target/debug/conex clean
+    docker system prune --all --force
+
+test-docker-nginx:
+    docker pull nginx
+    docker run --rm nginx
+
+run-snapshotter:
+    cargo build
+    sudo env "PATH=$PATH" ./target/debug/conex clean
+    docker system prune --all --force
+    sudo env "PATH=$PATH" ./target/debug/conex snapshotter

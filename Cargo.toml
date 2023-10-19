@@ -27,6 +27,7 @@ serde = "1.0.189"
 serde_json = "1.0.107"
 sled = "0.34.7"
 tar = "0.4.38"
+tempfile = "3.8.0"
 tokio = { version = "1.33.0", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
 tokio-util = { version = "0.7.9", features = ["full"] }

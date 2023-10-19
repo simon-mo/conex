@@ -127,12 +127,18 @@ async fn download_layer(
     let untar_thread = tokio::task::spawn_blocking(move || {
         let read_decoded_sync = read_decoded.as_mut_base();
         let mut tar = tar::Archive::new(BlockingReader::new(read_decoded_sync));
+        tar.set_preserve_ownerships(true);
+        tar.set_preserve_permissions(true);
+        tar.set_preserve_mtime(true);
 
         let unpack_to = unpack_location.clone();
 
         for entry in tar.entries().unwrap() {
             let mut entry = entry.unwrap();
             let path = entry.path().unwrap().display().to_string();
+
+            entry.unpack_in(&unpack_to).unwrap();
+            continue;
 
             match entry.header().entry_type() {
                 tar::EntryType::Directory => {

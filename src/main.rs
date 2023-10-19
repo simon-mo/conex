@@ -47,15 +47,19 @@ enum Commands {
     Pull { name: String },
 
     Snapshotter {},
+
+    Clean {},
 }
 
 const BLOB_LOCATION: &str = "/tmp/conex-blob-store";
 const MOUNT_LOCATION: &str = "/tmp/conex-mount";
 const SOCKET_LOCATION: &str = "/tmp/conex-snapshotter.sock";
+const METADATA_DB_PATH: &str = "/tmp/conex-metadata.db";
 
 fn ensure_conex_dirs() {
     std::fs::create_dir_all(BLOB_LOCATION).unwrap();
     std::fs::create_dir_all(MOUNT_LOCATION).unwrap();
+    std::fs::create_dir_all(METADATA_DB_PATH).unwrap();
 }
 
 #[tokio::main]
@@ -98,8 +102,15 @@ async fn main() {
                 BLOB_LOCATION.into(),
                 MOUNT_LOCATION.into(),
                 SOCKET_LOCATION.into(),
+                METADATA_DB_PATH.into(),
             )
             .await;
+        }
+        Commands::Clean {} => {
+            println!("Cleaning up");
+            let _ = std::fs::remove_dir_all(BLOB_LOCATION);
+            // std::fs::remove_dir_all(MOUNT_LOCATION).unwrap();
+            let _ = std::fs::remove_dir_all(METADATA_DB_PATH);
         }
     }
 }

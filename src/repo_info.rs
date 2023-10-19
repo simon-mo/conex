@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use reqwest::{Method, Request};
 
 use crate::reference::DockerReference;
@@ -63,8 +65,7 @@ impl RepoInfo {
                 //         }
                 //     }
                 // }
-                let config = home::home_dir()
-                    .unwrap()
+                let config = PathBuf::from("/home/ubuntu") // hard-coding this due to running under root.
                     .join(".docker")
                     .join("config.json");
                 let config = std::fs::read_to_string(config).unwrap();
