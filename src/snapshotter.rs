@@ -64,7 +64,6 @@ impl DataStore {
 }
 
 struct SkySnapshotter {
-    client: reqwest::Client,
     data_store: Arc<Mutex<DataStore>>,
     snapshot_dir: String,
     mount_dir: String,
@@ -73,7 +72,6 @@ struct SkySnapshotter {
 impl SkySnapshotter {
     async fn new(snapshot_dir: String, mount_dir: String) -> Self {
         SkySnapshotter {
-            client: reqwest::Client::new(),
             data_store: Arc::new(Mutex::new(DataStore::new().await)),
             snapshot_dir,
             mount_dir,
@@ -149,13 +147,8 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 let mut lower_dirs = lower_dir_keys
                     .iter()
                     .map(|key| {
-                        let sha = store.key_to_sha_map.get(key).expect(
-                            format!(
-                            "can't find the corresponding sha for key={}, this shouldn't happen.",
-                            key
-                        )
-                            .as_str(),
-                        );
+                        let sha = store.key_to_sha_map.get(key).unwrap_or_else(|| panic!("can't find the corresponding sha for key={}, this shouldn't happen.",
+                            key));
                         let dir = format!("{}/{}", self.snapshot_dir, sha);
                         assert!(std::path::Path::new(&dir).is_dir());
                         dir
@@ -262,7 +255,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
                     .iter()
                     .filter(|info| {
                         for filters_ in filters.clone() {
-                            for filter in filters_.as_str().split(",") {
+                            for filter in filters_.as_str().split(',') {
                                 let [key, value] = filter.split("==").collect::<Vec<&str>>()[..] else {
                                     panic!("Invalid filter {}", filter);
                                 };
@@ -278,7 +271,6 @@ impl snapshots::Snapshotter for SkySnapshotter {
                                 } else {
                                     panic!("Unknown filter {}", key);
                                 }
-                                return true;
                             }
                         }
                         true

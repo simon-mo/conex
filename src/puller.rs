@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{io::Read, path::Path};
@@ -8,7 +7,7 @@ use futures::stream::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use oci_spec::image::{Descriptor, ImageConfiguration, ImageManifest, MediaType};
 use reqwest::Client;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::progress::{AsyncProgressReader, UpdateItem, UpdateType};
 use crate::repo_info::RepoInfo;
@@ -320,7 +319,7 @@ impl ContainerPuller {
             let client = self.client.clone();
             let blob_store_path = self.blob_store_path.clone();
             let repo_info = repo_info.clone();
-            let descriptor = descriptor.deref().to_owned();
+            let descriptor = (*descriptor).to_owned();
             let sema = sema.clone();
             let progress_tx = progress_tx.clone();
 
@@ -359,7 +358,7 @@ impl ContainerPuller {
         }
     }
 
-    fn make_overlay_command(&self, layers: &[Descriptor]) -> String {
+    fn _make_overlay_command(&self, layers: &[Descriptor]) -> String {
         let blob_path = PathBuf::from(BLOB_LOCATION);
         let mount_path = PathBuf::from(MOUNT_LOCATION);
 
