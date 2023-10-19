@@ -118,8 +118,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
                 let lower_dir_keys = &keys[1..];
 
                 let overylay_dir = Path::new(&self.mount_dir).join(
-                    key.replace('/', "-")
-                        .replace(':', "-")
+                    key.replace(['/', ':'], "-")
                         .split(' ')
                         .next()
                         .unwrap(),

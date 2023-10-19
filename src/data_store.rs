@@ -3,11 +3,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fmt::Debug};
 
-fn clone_info_hack(info: &Info) -> Info {
-    // a hack because the Info doesn't have copy trait
-    serde_json::from_str(&serde_json::to_string(info).unwrap()).unwrap()
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct SerdeMount {
     r#type: String,
@@ -25,12 +20,12 @@ impl From<Mount> for SerdeMount {
     }
 }
 
-impl Into<Mount> for SerdeMount {
-    fn into(self) -> Mount {
+impl From<SerdeMount> for Mount {
+    fn from(val: SerdeMount) -> Self {
         Mount {
-            r#type: self.r#type,
-            source: self.source,
-            options: self.options,
+            r#type: val.r#type,
+            source: val.source,
+            options: val.options,
             ..Default::default()
         }
     }
@@ -228,7 +223,7 @@ mod tests {
     #[test]
     fn test_insert_and_find_info_by_name() {
         let mut store = _new_store();
-        let mut info = Info {
+        let info = Info {
             name: "test_name".to_string(),
             ..Default::default()
         };
