@@ -67,3 +67,78 @@ impl DataStore {
         self.sha_fetched.contains(sha)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use containerd_snapshots::api::types::Mount;
+
+    #[test]
+    fn test_new() {
+        let store = DataStore::new();
+        assert_eq!(store.get_all_info().len(), 0);
+        assert_eq!(store.get_all_sha_fetched().len(), 0);
+    }
+
+    #[test]
+    fn test_insert_and_get_all_sha_fetched() {
+        let mut store = DataStore::new();
+        store.insert_sha_fetched("sha1".to_string());
+        store.insert_sha_fetched("sha2".to_string());
+
+        let shas = store.get_all_sha_fetched();
+        assert_eq!(shas.len(), 2);
+        assert!(shas.contains("sha1"));
+        assert!(shas.contains("sha2"));
+    }
+
+    #[test]
+    fn test_insert_and_get_all_info() {
+        let mut store = DataStore::new();
+        let info1 = Info::default();
+        let info2 = Info::default();
+        store.insert_info(clone_info_hack(&info1));
+        store.insert_info(clone_info_hack(&info2));
+
+        let infos = store.get_all_info();
+        assert_eq!(infos.len(), 2);
+    }
+
+    #[test]
+    fn test_insert_and_find_info_by_name() {
+        let mut store = DataStore::new();
+        let mut info = Info::default();
+        info.name = "test_name".to_string();
+        store.insert_info(info);
+
+        let result = store.find_info_by_name("test_name");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "test_name")
+    }
+
+    #[test]
+    fn test_insert_key_to_sha_and_find_sha_by_key() {
+        let mut store = DataStore::new();
+        store.insert_key_to_sha("key1".to_string(), "sha1".to_string());
+
+        assert_eq!(store.find_sha_by_key("key1"), Some(&"sha1".to_string()));
+    }
+
+    #[test]
+    fn test_insert_mount_and_find_mount_by_key() {
+        let mut store = DataStore::new();
+        let mount = Mount::default();
+        store.insert_mount("key1".to_string(), mount.clone());
+
+        assert_eq!(store.find_mount_by_key("key1"), Some(&mount));
+    }
+
+    #[test]
+    fn test_is_sha_fetched() {
+        let mut store = DataStore::new();
+        store.insert_sha_fetched("sha1".to_string());
+
+        assert!(store.is_sha_fetched("sha1"));
+        assert!(!store.is_sha_fetched("sha2"));
+    }
+}
