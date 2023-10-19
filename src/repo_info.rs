@@ -15,10 +15,14 @@ pub struct RepoInfo {
 
 impl RepoInfo {
     pub async fn from_string(source_image: String) -> RepoInfo {
-        let reference = DockerReference::parse(&source_image).unwrap();
+        let mut reference = DockerReference::parse(&source_image).unwrap();
 
         if reference.digest().is_some() {
             unimplemented!("Digest in image reference is not supported yet.");
+        }
+
+        if reference.domain() == Some("docker.io") {
+            reference.domain = None;
         }
 
         let protocol = {
@@ -169,7 +173,7 @@ impl RepoInfo {
         );
         req.headers_mut().insert(
             http::header::ACCEPT,
-            http::HeaderValue::from_str("application/vnd.oci.image.manifest.v1+json").unwrap(),
+            http::HeaderValue::from_str("application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json").unwrap(),
         );
 
         if let Some(v) = self.auth_token.as_ref() {

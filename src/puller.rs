@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{io::Read, path::Path};
@@ -57,11 +58,6 @@ async fn download_layer(
     descriptor: Descriptor,
     progress_tx: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 ) {
-    assert!(
-        descriptor.media_type() == &MediaType::ImageLayerZstd,
-        "conex only support zstd layer at the moment"
-    );
-
     let resp = client
         .execute(repo_info.get_blob_request(descriptor.digest()))
         .await
@@ -97,11 +93,33 @@ async fn download_layer(
 
     let mut work_set = tokio::task::JoinSet::new();
     let progress_key = digest.clone();
+    let media_type = descriptor.media_type().clone();
     work_set.spawn(async move {
         let progress_reader =
             AsyncProgressReader::new(read_raw, progress_key, UpdateType::SocketRecv, progress_tx);
         let bufreader = tokio::io::BufReader::with_capacity(64 * 1024, progress_reader);
-        let mut reader = async_compression::tokio::bufread::ZstdDecoder::new(bufreader);
+
+        let mut reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = match media_type {
+            MediaType::ImageLayerGzip => Box::new(
+                async_compression::tokio::bufread::GzipDecoder::new(bufreader),
+            ),
+            MediaType::Other(s) => {
+                assert!(s == "application/vnd.docker.image.rootfs.diff.tar.gzip");
+                Box::new(async_compression::tokio::bufread::GzipDecoder::new(
+                    bufreader,
+                ))
+            }
+            MediaType::ImageLayerZstd => Box::new(
+                async_compression::tokio::bufread::ZstdDecoder::new(bufreader),
+            ),
+            _ => {
+                unimplemented!(
+                    "conex only support zstd or gzip layer at the moment, but got {:?}",
+                    media_type
+                );
+            }
+        };
+
         tokio::io::copy(&mut reader, &mut write_decoded)
             .await
             .unwrap();
@@ -206,17 +224,38 @@ impl ContainerPuller {
         }
     }
 
-    pub async fn pull(&self, image_tag: String, jobs: usize, show_progress: bool) {
+    pub async fn pull(
+        &self,
+        image_tag: String,
+        jobs: usize,
+        show_progress: bool,
+        skip_digests: Option<HashSet<String>>,
+    ) -> Vec<String> {
         let repo_info = RepoInfo::from_string(image_tag).await;
 
         let manifest = self.download_manifest(&repo_info).await;
         let _config = self.download_config(&repo_info, manifest.config()).await;
-        self.download_layers(&repo_info, manifest.layers(), jobs, show_progress)
+        let layers_to_fetch = manifest
+            .layers()
+            .iter()
+            .filter(|desc| match skip_digests {
+                Some(ref skip_digests) => {
+                    !skip_digests.contains(&desc.digest().replace("sha256:", ""))
+                }
+                None => true,
+            })
+            .collect::<Vec<&Descriptor>>();
+        self.download_layers(&repo_info, layers_to_fetch.clone(), jobs, show_progress)
             .await;
 
-        let mount_cmd = self.make_overlay_command(&manifest.layers());
-        info!("Created the following command to mount the image:");
-        info!("{}", mount_cmd);
+        // let mount_cmd = self.make_overlay_command(manifest.layers());
+        // info!("Created the following command to mount the image:");
+        // info!("{}", mount_cmd);
+
+        layers_to_fetch
+            .into_iter()
+            .map(|desc| desc.digest().replace("sha256:", "").to_string())
+            .collect()
 
         // docker run --rm --mount type=bind,source=/tmp/conex-mount/flying-aphid/merged,target=/conex busybox chroot /conex ls -lh
     }
@@ -261,7 +300,7 @@ impl ContainerPuller {
     async fn download_layers(
         &self,
         repo_info: &RepoInfo,
-        descriptors: &[Descriptor],
+        descriptors: Vec<&Descriptor>,
         jobs: usize,
         show_progress: bool,
     ) {
@@ -281,7 +320,7 @@ impl ContainerPuller {
             let client = self.client.clone();
             let blob_store_path = self.blob_store_path.clone();
             let repo_info = repo_info.clone();
-            let descriptor = descriptor.clone();
+            let descriptor = descriptor.deref().to_owned();
             let sema = sema.clone();
             let progress_tx = progress_tx.clone();
 

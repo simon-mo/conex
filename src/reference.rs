@@ -6,7 +6,7 @@ use std::fmt;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct DockerReference {
-    domain: Option<String>,
+    pub domain: Option<String>,
     port: Option<u16>,
     name: String,
     tag: Option<String>,

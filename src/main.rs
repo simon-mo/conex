@@ -50,6 +50,7 @@ enum Commands {
 
 const BLOB_LOCATION: &str = "/tmp/conex-blob-store";
 const MOUNT_LOCATION: &str = "/tmp/conex-mount";
+const SOCKET_LOCATION: &str = "/tmp/conex-snapshotter.sock";
 
 fn ensure_conex_dirs() {
     std::fs::create_dir_all(BLOB_LOCATION).unwrap();
@@ -87,12 +88,17 @@ async fn main() {
             println!("Pulling container: {:?}", name);
             ensure_conex_dirs();
             let puller = ContainerPuller::new(BLOB_LOCATION.into());
-            puller.pull(name, jobs, show_progress).await;
+            puller.pull(name, jobs, show_progress, None).await;
         }
         Commands::Snapshotter {} => {
             println!("Running snapshotter");
             ensure_conex_dirs();
-            serve_snapshotter().await;
+            serve_snapshotter(
+                BLOB_LOCATION.into(),
+                MOUNT_LOCATION.into(),
+                SOCKET_LOCATION.into(),
+            )
+            .await;
         }
     }
 }
