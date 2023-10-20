@@ -86,10 +86,7 @@ async fn upload_layer(
                     }
                     tar_builder
                         .append_path_with_name(&file.path, &relative_path)
-                        .expect(
-                            format!("Failed to add file {:?}, {}", file.path, relative_path)
-                                .as_str(),
-                        );
+                        .unwrap_or_else(|_| panic!("Failed to add file {:?}, {}", file.path, relative_path));
                 }
             }
         }

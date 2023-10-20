@@ -345,7 +345,7 @@ impl ContainerPuller {
                     pbar.set_style(sty.clone());
                     pbar.set_message(desc.digest().clone());
                     pbar.set_length(desc.size() as u64);
-                    (desc.digest().split(":").nth(1).unwrap().to_owned(), pbar)
+                    (desc.digest().split(':').nth(1).unwrap().to_owned(), pbar)
                 })
                 .collect::<HashMap<String, ProgressBar>>();
 
