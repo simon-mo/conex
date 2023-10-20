@@ -117,12 +117,8 @@ impl snapshots::Snapshotter for SkySnapshotter {
 
                 let lower_dir_keys = &keys[1..];
 
-                let overylay_dir = Path::new(&self.mount_dir).join(
-                    key.replace(['/', ':'], "-")
-                        .split(' ')
-                        .next()
-                        .unwrap(),
-                );
+                let overylay_dir = Path::new(&self.mount_dir)
+                    .join(key.replace(['/', ':'], "-").split(' ').next().unwrap());
                 if !overylay_dir.exists() {
                     std::fs::create_dir_all(&overylay_dir).unwrap();
                 }
@@ -143,7 +139,7 @@ impl snapshots::Snapshotter for SkySnapshotter {
                             .map(|key| {
                                 let sha = store.find_sha_by_key(key).unwrap_or_else(|| panic!("can't find the corresponding sha for key={}, this shouldn't happen.",
                                     key));
-                                let dir = format!("{}/{}", self.snapshot_dir, sha);
+                                let dir = format!("{}/{}", self.snapshot_dir, &sha[..8]);
                                 assert!(std::path::Path::new(&dir).is_dir());
                                 dir
                             })
@@ -251,7 +247,6 @@ impl snapshots::Snapshotter for SkySnapshotter {
                             return true;
                         }
 
-                        info!("Filtering info: {:?}, filters={:?}", info, filters);
                         assert!(filters.len() == 1);
                         for filter in filters.iter().next().unwrap().as_str().split(',') {
                             let [key, value] = filter.split("==").collect::<Vec<&str>>()[..] else {
@@ -359,7 +354,9 @@ impl snapshots::Snapshotter for SkySnapshotter {
             }
             let sha = name.split('/').last().unwrap().replace("sha256:", "");
             let dst = Path::new(&self.snapshot_dir).join(&sha);
-            std::fs::rename(src, dst).unwrap();
+            let short_dst = Path::new(&self.snapshot_dir).join(&sha[..8]);
+            std::fs::rename(src, &dst).unwrap();
+            std::os::unix::fs::symlink(&dst, short_dst).unwrap();
 
             store.insert_key_to_sha(name, sha.clone());
             store.insert_sha_fetched(sha.clone());

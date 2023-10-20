@@ -172,6 +172,10 @@ mod tests {
     use super::*;
     use containerd_snapshots::api::types::Mount;
 
+    fn clone_info_hack(info: &Info) -> Info {
+        serde_json::from_str(&serde_json::to_string(info).unwrap()).unwrap()
+    }
+
     fn _new_store() -> DataStore {
         DataStore::new(
             tempfile::TempDir::new()

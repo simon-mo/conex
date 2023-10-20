@@ -3,14 +3,16 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
 use oci_spec::image::Descriptor;
 use reqwest::{Client, RequestBuilder};
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 use tracing::info;
 
 use crate::{
+    data_store::DataStore,
     planner::ConexPlanner,
     progress::{UpdateItem, UpdateType},
     repo_info::RepoInfo,
     uploader::ConexUploader,
+    METADATA_DB_PATH,
 };
 
 pub struct ContainerPusher {
@@ -216,17 +218,61 @@ impl ContainerPusher {
             .expect("Unable to find image");
 
         let graph_driver = image_info.graph_driver.expect("No graph driver");
-        assert!(graph_driver.name == "overlay2");
-        let upper_layer = graph_driver
-            .data
-            .get("UpperDir")
-            .expect("No UpperDir")
-            .to_owned();
-        let lower_layers: Vec<String> = match graph_driver.data.get("LowerDir") {
-            Some(lower_dir) => lower_dir.split(':').map(|s| s.to_owned()).collect(),
-            None => Vec::new(),
+
+        let layers: Vec<String> = {
+            if graph_driver.name == "overlay2" {
+                let upper_layer = graph_driver
+                    .data
+                    .get("UpperDir")
+                    .expect("No UpperDir")
+                    .to_owned();
+                let lower_layers: Vec<String> = match graph_driver.data.get("LowerDir") {
+                    Some(lower_dir) => lower_dir.split(':').map(|s| s.to_owned()).collect(),
+                    None => Vec::new(),
+                };
+                vec![upper_layer].into_iter().chain(lower_layers).collect()
+            } else if graph_driver.name == "conex" {
+                let store = DataStore::new(METADATA_DB_PATH.into());
+                let all_names = store
+                    .get_all_info()
+                    .iter()
+                    .map(|info| info.name.clone())
+                    .collect::<Vec<_>>();
+                image_info
+                    .root_fs
+                    .unwrap()
+                    .layers
+                    .unwrap()
+                    .iter()
+                    .map(|diff_id| {
+                        info!("Looking for diff id: {}", diff_id);
+                        let sha_option_1 = all_names
+                            .iter()
+                            .find(|name| name.contains(diff_id))
+                            .map(|found_name| store.find_sha_by_key(found_name).unwrap());
+
+                        let sha_option_2 = {
+                            let metadata_path = PathBuf::from("/var/lib/docker/image/overlay2/distribution/v2metadata-by-diffid/sha256/")
+                                .join(diff_id.strip_prefix("sha256:").unwrap());
+                            if metadata_path.exists() {
+                                let metadata = std::fs::read_to_string(metadata_path).unwrap();
+                                let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+                                let sha = metadata[0]["Digest"].as_str().unwrap().strip_prefix("sha256:").unwrap();
+                                Some(sha.to_owned())
+                            } else {
+                                None
+                            }
+                        };
+
+                        info!("Option 1: {:?}, Option 2: {:?}", sha_option_1, sha_option_2);
+
+                        sha_option_1.or(sha_option_2).unwrap()
+                    })
+                    .collect()
+            } else {
+                unreachable!("Unknown graph driver, expected overlay2 or conex")
+            }
         };
-        let layers: Vec<String> = vec![upper_layer].into_iter().chain(lower_layers).collect();
 
         info!("Image {} has {} layers", &repo_info.raw_tag, layers.len());
 

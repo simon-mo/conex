@@ -109,7 +109,7 @@ async fn main() {
         Commands::Clean {} => {
             println!("Cleaning up");
             let _ = std::fs::remove_dir_all(BLOB_LOCATION);
-            // std::fs::remove_dir_all(MOUNT_LOCATION).unwrap();
+            let _ = std::fs::remove_dir_all(MOUNT_LOCATION);
             let _ = std::fs::remove_dir_all(METADATA_DB_PATH);
         }
     }

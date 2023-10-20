@@ -1,8 +1,42 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use reqwest::{Method, Request};
 
 use crate::reference::DockerReference;
+
+fn parse_www_authenticate_fields(input: &str) -> HashMap<String, String> {
+    // written by gpt4: https://chat.openai.com/share/208be7c4-5e87-4949-bafd-addcff76d34f
+
+    let mut map = HashMap::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+
+    for (i, c) in input.chars().enumerate() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                let (key, value) = split_segment(&input[start..i]);
+                map.insert(key, value.trim_matches('"').to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn split_segment(segment: &str) -> (String, &str) {
+        let mut split = segment.splitn(2, '=');
+        (
+            split.next().unwrap_or("").to_string(),
+            split.next().unwrap_or(""),
+        )
+    }
+
+    // Handle the last segment
+    let (key, value) = split_segment(&input[start..]);
+    map.insert(key, value.trim_matches('"').to_string());
+
+    map
+}
 
 #[derive(Clone, Debug)]
 pub struct RepoInfo {
@@ -40,8 +74,6 @@ impl RepoInfo {
             }
         };
 
-        let mut auth_token = None;
-
         let registry_host_url = match reference.domain() {
             Some(domain) => format!(
                 "{}://{}{}",
@@ -54,17 +86,59 @@ impl RepoInfo {
             ),
             None => {
                 // TODO: We should also handle the case of explicit docker.io.
+                "https://registry-1.docker.io".to_string()
+            }
+        };
 
-                // Authenticate and add token to auth_headers
-                // First, read the password from the config file
-                // /home/ubuntu/.docker/config.json
-                // {
-                //     "auths": {
-                //         "https://index.docker.io/v1/": {
-                //             "auth": "base64 encoded of username:password"
-                //         }
-                //     }
-                // }
+        let mut auth_token = None;
+        if protocol == "https" {
+            // Authenticate and add token to auth_headers
+            // Figure out the auth realm, service, and scope by issuing a test request
+            // we should get a 401 back with following header
+            // www-authenticate: Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:nvidia/pytorch:pull"
+            let client = reqwest::Client::new();
+            let test_resp = client
+                .get(&format!(
+                    "{}/v2/{}/manifests/{}",
+                    registry_host_url,
+                    reference.name(),
+                    reference.tag().unwrap_or("latest")
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert!(
+                test_resp.status() == 401,
+                "expect status code to be Unauthorized (401) so we can perform proper authentication (got {})",
+                test_resp.status()
+            );
+            let header = test_resp
+                .headers()
+                .get("www-authenticate")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(header.starts_with("Bearer "));
+            let header = header.trim_start_matches("Bearer").trim_start();
+            let auth_request_data = parse_www_authenticate_fields(header);
+
+            // https://username:password@auth.docker.io/token?service=registry.docker.io&scope=repository:simonmok/conex-workload:pull,push
+            // TODO: make this fine-grained to only request the scope we need.
+            let mut token_req = client.get(&auth_request_data["realm"]).query(&[(
+                "service",
+                auth_request_data
+                    .get("service")
+                    .unwrap_or(
+                        &reference
+                            .domain()
+                            .unwrap_or("https://registry-1.docker.io")
+                            .to_string(),
+                    )
+                    .to_owned(),
+            )]);
+
+            if reference.domain().is_none() {
+                // docker hub
                 let config = PathBuf::from("/home/ubuntu") // hard-coding this due to running under root.
                     .join(".docker")
                     .join("config.json");
@@ -77,29 +151,34 @@ impl RepoInfo {
                 let auth = String::from_utf8(auth).unwrap();
                 let auth = auth.split(':').collect::<Vec<_>>();
 
-                // https://username:password@auth.docker.io/token?service=registry.docker.io&scope=repository:simonmok/conex-workload:pull,push
-                // TODO: make this fine-grained to only request the scope we need.
-                let token_resp = reqwest::Client::new()
-                    .get("https://auth.docker.io/token")
-                    .basic_auth(auth[0], Some(auth[1]))
-                    .query(&[
-                        ("service", "registry.docker.io"),
-                        (
-                            "scope",
-                            format!("repository:{}:pull,push", reference.name()).as_str(),
-                        ),
-                    ])
-                    .send()
-                    .await
-                    .unwrap();
-                assert!(token_resp.status() == 200);
-                let token_resp = token_resp.json::<serde_json::Value>().await.unwrap();
-                let token = token_resp["token"].as_str().unwrap();
-                auth_token.replace(format!("Bearer {}", token).to_string());
-
-                "https://registry-1.docker.io".to_string()
+                token_req = token_req.basic_auth(auth[0], Some(auth[1])).query(&[(
+                    "scope",
+                    format!("repository:{}:pull,push", reference.name()),
+                )]);
+            } else {
+                // private registry
+                token_req = token_req.query(&[(
+                    "scope",
+                    auth_request_data["scope"].clone(), // because the test reques tonly concerns pull, we sometimes need to push as well.
+                                                        // format!("repository:{}:pull,push", reference.name()),
+                )]);
             }
-        };
+
+            let token_resp = token_req
+                // .basic_auth(auth[0], Some(auth[1]))
+                .send()
+                .await
+                .unwrap();
+            assert!(
+                token_resp.status() == 200,
+                "status_code: {:?}, headers: {:?}",
+                token_resp.status(),
+                token_resp.headers()
+            );
+            let token_resp = token_resp.json::<serde_json::Value>().await.unwrap();
+            let token = token_resp["token"].as_str().unwrap();
+            auth_token.replace(format!("Bearer {}", token).to_string());
+        }
 
         Self {
             raw_tag: source_image.to_string(),

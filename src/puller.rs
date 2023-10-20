@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{io::Read};
 
 use futures::stream::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -74,13 +74,16 @@ async fn download_layer(
     // overlayfs mount array.
     let digest = descriptor.digest().split(':').nth(1).unwrap().to_string();
     let unpack_location = blob_store_path.join(&digest);
+    let unpack_location_short = blob_store_path.join(&digest[..8]);
     // TODO: if the location is not empty, we should check it has the entirity of the content
     // but for now, let's clean it up and download again.
     if unpack_location.exists() {
         debug!("{} already exists, removing", unpack_location.display());
         std::fs::remove_dir_all(&unpack_location).unwrap();
+        std::fs::remove_dir_all(&unpack_location_short).unwrap();
     }
     std::fs::create_dir_all(&unpack_location).unwrap();
+    std::os::unix::fs::symlink(&unpack_location, &unpack_location_short).unwrap();
 
     let start = std::time::Instant::now();
     let total_bytes = resp.content_length().unwrap();
@@ -342,12 +345,12 @@ impl ContainerPuller {
                     pbar.set_style(sty.clone());
                     pbar.set_message(desc.digest().clone());
                     pbar.set_length(desc.size() as u64);
-                    (desc.digest().to_owned(), pbar)
+                    (desc.digest().split(":").nth(1).unwrap().to_owned(), pbar)
                 })
                 .collect::<HashMap<String, ProgressBar>>();
 
             while let Some(item) = progress_rx.recv().await {
-                if item.update_type == UpdateType::TarAdd {
+                if item.update_type == UpdateType::SocketRecv {
                     let pbar = bars.get(&item.key).unwrap();
                     pbar.inc(item.delta as u64);
                 }

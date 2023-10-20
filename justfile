@@ -68,3 +68,18 @@ run-snapshotter:
     sudo env "PATH=$PATH" ./target/debug/conex clean
     docker system prune --all --force
     sudo env "PATH=$PATH" ./target/debug/conex snapshotter
+
+run-snapshotter-release:
+    cargo build --release
+    sudo env "PATH=$PATH" ./target/release/conex clean
+    docker system prune --all --force
+    sudo env "PATH=$PATH" ./target/release/conex snapshotter
+
+
+build-vllm:
+    docker pull nvcr.io/nvidia/pytorch:23.09-py3
+    docker build -t vllm:latest -f workloads/vllm.Dockerfile workloads
+
+push-vllm:
+    cargo build --release
+    sudo env "PATH=$PATH" ./target/release/conex push simonmok/vllm:raw
