@@ -7,7 +7,7 @@ use futures::stream::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use oci_spec::image::{Descriptor, ImageConfiguration, ImageManifest, MediaType};
 use reqwest::Client;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::progress::{AsyncProgressReader, UpdateItem, UpdateType};
 use crate::repo_info::RepoInfo;
@@ -195,6 +195,8 @@ async fn download_layer(
         resp.bytes_stream()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
     );
+
+    // TODO: figure out a way to saturate network bandiwdth, don't get congested controlled, and automatically parallelize download.
     tokio::io::copy_buf(&mut output_from_socket, &mut write_raw)
         .await
         .unwrap();
@@ -316,7 +318,7 @@ impl ContainerPuller {
         // TODO: move this to shared code with puller later.
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<UpdateItem>();
         let m = Arc::new(MultiProgress::with_draw_target(
-            ProgressDrawTarget::stdout_with_hz(20),
+            ProgressDrawTarget::stdout_with_hz(6),
         ));
         let sty = ProgressStyle::with_template("{spinner:.green} ({msg}) [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes:>12}/{total_bytes:>12} ({bytes_per_sec:>15}, {eta:>5})")
                 .unwrap()
@@ -331,8 +333,9 @@ impl ContainerPuller {
             let progress_tx = progress_tx.clone();
 
             tasks.spawn(async move {
-                let _ = sema.acquire().await.unwrap();
+                let permit = sema.acquire().await.unwrap();
                 download_layer(client, blob_store_path, repo_info, descriptor, progress_tx).await;
+                drop(permit);
             });
         });
 
@@ -342,8 +345,10 @@ impl ContainerPuller {
                 .iter()
                 .map(|desc| {
                     let pbar = m.add(indicatif::ProgressBar::new(0));
+                    let msg =
+                        desc.digest().clone().strip_prefix("sha256:").unwrap()[..6].to_owned();
                     pbar.set_style(sty.clone());
-                    pbar.set_message(desc.digest().clone());
+                    pbar.set_message(msg);
                     pbar.set_length(desc.size() as u64);
                     (desc.digest().split(':').nth(1).unwrap().to_owned(), pbar)
                 })

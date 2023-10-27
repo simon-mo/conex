@@ -56,7 +56,6 @@ impl ContainerPusher {
             .push_blobs(repo_info.clone(), jobs, show_progress)
             .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
-        layer_descriptors.reverse();
         let config_descriptor = self
             .push_config(repo_info.clone(), layer_descriptors.clone())
             .await;
@@ -106,7 +105,7 @@ impl ContainerPusher {
                     .build()
                     .unwrap()
             })
-            .rev()
+            // .rev()
             .collect::<Vec<_>>();
 
         let image_config_builder = oci_spec::image::ImageConfigurationBuilder::default()
@@ -219,7 +218,7 @@ impl ContainerPusher {
 
         let graph_driver = image_info.graph_driver.expect("No graph driver");
 
-        let layers: Vec<String> = {
+        let mut layers: Vec<String> = {
             if graph_driver.name == "overlay2" {
                 let upper_layer = graph_driver
                     .data
@@ -273,6 +272,8 @@ impl ContainerPusher {
                 unreachable!("Unknown graph driver, expected overlay2 or conex")
             }
         };
+        // We need to reverse the layers because top layer is currently the newest layer.
+        // layers.reverse();
 
         info!("Image {} has {} layers", &repo_info.raw_tag, layers.len());
 

@@ -35,9 +35,9 @@ struct Args {
         long,
         short,
         help = "Show progress bar, default to true",
-        default_value = "true"
+        default_value = "false"
     )]
-    progress: bool,
+    no_progress: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -81,7 +81,7 @@ async fn main() {
     let jobs = args.jobs.unwrap_or_else(num_cpus::get);
     info!("Running with {} threads in parallel", jobs);
 
-    let show_progress = args.progress;
+    let show_progress = !args.no_progress;
 
     match args.command {
         Commands::Push { name } => {

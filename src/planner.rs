@@ -1,5 +1,5 @@
 use core::panic;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
@@ -53,7 +53,8 @@ impl ConexPlanner {
             let absolute_path = base_path.join(&current_path);
             for entry in fs::read_dir(&absolute_path).unwrap() {
                 let entry = entry.unwrap();
-                let metadata = entry.metadata().unwrap();
+                // let metadata = entry.metadata().unwrap();
+                let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
                 let relative_path = entry.path().strip_prefix(&base_path).unwrap().to_path_buf();
 
                 if entry.path().is_dir() && !metadata.is_symlink() {
@@ -94,6 +95,27 @@ impl ConexPlanner {
                 (key, files)
             })
             .collect::<Vec<(String, Vec<ConexFile>)>>();
+
+        // Pass 2: Split and collapse layers so the size is about 512MB.
+        // let mut new_layer_to_files = Vec::new();
+        // let mut current_layer_size: usize = 0;
+        // let mut new_layer = Vec::new();
+        // for (layer, files) in self.layer_to_files.iter() {
+        //     for file in files.iter() {
+        //         if current_layer_size + file.size > 512 * 1024 * 1024 {
+        //             new_layer_to_files.push((layer.to_owned(), new_layer.clone()));
+        //             new_layer = Vec::new();
+        //             current_layer_size = 0;
+        //         }
+
+        //         new_layer.push(file.to_owned());
+        //         current_layer_size += file.size;
+        //     }
+
+        //     if !new_layer.is_empty() {
+        //         new_layer_to_files.push((layer.to_owned(), new_layer));
+        //     }
+        // }
 
         self.layer_to_files.clone()
     }

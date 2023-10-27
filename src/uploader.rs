@@ -6,19 +6,59 @@ use bytes::Bytes;
 use oci_spec::image::Descriptor;
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::sync::Arc;
 use std::vec;
 use tar::{Builder as TarBuilder, EntryType, Header};
 
 use zstd::stream::write::Encoder as ZstdEncoder;
+pub struct BlockingWriter<T>
+where
+    T: Write,
+{
+    inner: T,
+}
 
+impl<T> BlockingWriter<T>
+where
+    T: Write,
+{
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+
+impl<T> Write for BlockingWriter<T>
+where
+    T: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.write(buf) {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        // note: spin here
+                        std::thread::yield_now();
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 pub struct ConexUploader {
     client: Client,
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 }
 
-const UPLOAD_CHUNK_SIZE: usize = 64 * 1024 * 1024;
+const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
 async fn upload_layer(
     client: Client,
     repo_info: RepoInfo,
@@ -37,8 +77,9 @@ async fn upload_layer(
     let progress_sender_ = progress_sender.clone();
     upload_tasks.spawn_blocking(move || {
         let (bytes_written_tx, bytes_written_rx) = tokio::sync::oneshot::channel::<usize>();
+        let blocking_writer = BlockingWriter::new(producer.as_mut_base());
         let compressed_hasher = StreamingHashWriter::new(
-            producer.as_mut_base(),
+            blocking_writer,
             Some(Box::new(move |digest, bytes_written| {
                 hash_socket_tx.send(digest.clone()).unwrap();
                 hash_descriptor_tx.send(digest).unwrap();
@@ -84,9 +125,23 @@ async fn upload_layer(
                     {
                         relative_path.push('/');
                     }
+
+                    if !meta.is_dir() && !meta.is_file() && !meta.is_symlink() {
+                        // info!(
+                        //     "Unsupported file type {:?} for file {:?}",
+                        //     meta.file_type(),
+                        //     file.path
+                        // );
+                        continue;
+                    }
                     tar_builder
                         .append_path_with_name(&file.path, &relative_path)
-                        .unwrap_or_else(|_| panic!("Failed to add file {:?}, {}", file.path, relative_path));
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Failed to add file {:?}, {}. Original error: {:?}",
+                                file.path, relative_path, e
+                            )
+                        });
                 }
             }
         }
@@ -267,7 +322,7 @@ impl ConexUploader {
             let repo_info = self.repo_info.clone();
             let progress_sender = self.progress_sender.clone();
             parallel_uploads.spawn(async move {
-                let _ = semaphore.acquire().await;
+                let permit = semaphore.acquire().await;
                 let content_hash = upload_layer(
                     client,
                     repo_info,
@@ -276,6 +331,8 @@ impl ConexUploader {
                     progress_sender,
                 )
                 .await;
+
+                drop(permit);
 
                 (layer_id, content_hash)
             });

@@ -52,7 +52,12 @@ test-pull-local:
     cargo run -- --jobs 1 pull localhost:5000/workload
 
 test-pull-hub:
-    cargo run -- --jobs 1 pull simonmok/workload
+    cargo build
+    sudo env "PATH=$PATH" ./target/debug/conex --jobs 1  pull simonmok/workload
+
+test-pull-release-vllm:
+    cargo build --release
+    sudo env "PATH=$PATH" ./target/release/conex --jobs 16 pull simonmok/vllm:demo
 
 reset-all:
     cargo build
@@ -77,9 +82,33 @@ run-snapshotter-release:
 
 
 build-vllm:
-    docker pull nvcr.io/nvidia/pytorch:23.09-py3
+    # docker pull nvcr.io/nvidia/pytorch:23.09-py3
     docker build -t vllm:latest -f workloads/vllm.Dockerfile workloads
 
 push-vllm:
     cargo build --release
     sudo env "PATH=$PATH" ./target/release/conex push simonmok/vllm:raw
+
+
+demo-reset-world:
+    #!/usr/bin/env bash
+
+    # first reset docker
+    docker system prune --all --force
+    sudo bash -c 'rm -rf /var/lib/docker/*'
+    sudo systemctl daemon-reload
+    sudo systemctl restart docker
+    sudo systemctl restart containerd
+
+    # then reset conex
+    sudo env "PATH=$PATH" ./target/release/conex clean
+
+demo-reload-docker:
+    #!/usr/bin/env bash
+    sudo systemctl daemon-reload
+    sudo systemctl restart docker
+
+demo-run-snapshotter:
+    sudo env "PATH=$PATH" ./target/release/conex snapshotter
+
+# simonmok/vllm:demo
