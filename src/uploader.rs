@@ -10,6 +10,8 @@ use std::io::Write;
 use std::sync::Arc;
 use std::vec;
 use tar::{Builder as TarBuilder, EntryType, Header};
+use std::fs::File;
+use std::io::prelude::*;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 pub struct BlockingWriter<T>
@@ -154,6 +156,8 @@ async fn upload_layer(
         bytes_written_rx.blocking_recv().unwrap()
     });
 
+    //let mut layer_cpy = File::create("layer.txt").unwrap();
+
     // let client = client.clone();
     upload_tasks.spawn(async move {
         // Implementing the chunked upload protocol.
@@ -201,7 +205,10 @@ async fn upload_layer(
                 crate::progress::UpdateType::SocketSend,
                 Bytes::copy_from_slice(&send_buffer[0..buf_len]),
             );
-
+            
+            //let chunk_data = Bytes::copy_from_slice(&send_buffer[0..buf_len]);
+            //layer_cpy.write_all(&chunk_data);
+            
             // Note that because content range is inclusive, we need to subtract 1 from the end offset.
             let upload_chunk_resp = client
                 .execute({

@@ -49,7 +49,8 @@ test-real-push-alpine:
     cargo run -- push simonmok/alpine
 
 test-pull-local:
-    cargo run -- --jobs 1 pull localhost:5000/workload
+    cargo build
+    sudo env "PATH=$PATH" ./target/debug/conex --jobs 1  pull localhost:5000/workload
 
 test-pull-hub:
     cargo build
