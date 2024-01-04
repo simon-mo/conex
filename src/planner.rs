@@ -3,9 +3,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use std::cmp;
+
 
 pub struct ConexPlanner {
     pub layer_to_files: Vec<(String, Vec<ConexFile>)>,
+    pub split_threshold: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -22,6 +25,7 @@ impl ConexPlanner {
     pub fn default() -> Self {
         Self {
             layer_to_files: Vec::new(),
+            split_threshold: 512 * 1024 * 1024,
         }
     }
 
@@ -97,26 +101,183 @@ impl ConexPlanner {
             .collect::<Vec<(String, Vec<ConexFile>)>>();
 
         // Pass 2: Split and collapse layers so the size is about 512MB.
-        // let mut new_layer_to_files = Vec::new();
-        // let mut current_layer_size: usize = 0;
-        // let mut new_layer = Vec::new();
-        // for (layer, files) in self.layer_to_files.iter() {
-        //     for file in files.iter() {
-        //         if current_layer_size + file.size > 512 * 1024 * 1024 {
-        //             new_layer_to_files.push((layer.to_owned(), new_layer.clone()));
-        //             new_layer = Vec::new();
-        //             current_layer_size = 0;
-        //         }
+        let mut new_layer_to_files = Vec::new();
+        let mut current_layer_size: usize = 0;
+        let mut new_layer = Vec::new();
+        //let mut layer_counter = 0;
+        //let mut num_layers = 0;
+        for (layer, files) in self.layer_to_files.iter() {
+            //num_layers +=1;
+            for file in files.iter() {
+                let mut remainder_size = file.size;
+                //println!("File with size {}", remainder_size);
+                while remainder_size + current_layer_size >= self.split_threshold {
+                    let mut frag = file.clone();
+                    frag.size = self.split_threshold - current_layer_size;
+                    new_layer.push(frag.to_owned());
+                    new_layer_to_files.push((layer.clone(), new_layer.clone()));
+                    new_layer = Vec::new();
+                    current_layer_size = 0;
+                    //layer_counter += 1;
+                    remainder_size -= frag.size;
+                    //println!("Layer created, frag size {}", frag.size);
+                }
+                if remainder_size > 0 {
+                    let mut frag = file.clone();
+                    frag.size = remainder_size;
+                    new_layer.push(frag.to_owned());
+                    current_layer_size += remainder_size;
+                }
+            }
+        }
+        if !new_layer.is_empty() {
+            new_layer_to_files.push((String::from("last"), (new_layer).clone()));
+            //println!("last/first layer with size{}", new_layer.pop().unwrap().size.to_string());
+            //layer_counter +=1;
+        }
+       // println!("{} layers created from {} layers given, plan len {}",layer_counter,num_layers, new_layer_to_files.len());
+        new_layer_to_files.clone()
+    }
+}
 
-        //         new_layer.push(file.to_owned());
-        //         current_layer_size += file.size;
-        //     }
+// unit test module
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_split_layers() {
+        let mut planner = ConexPlanner::default();
 
-        //     if !new_layer.is_empty() {
-        //         new_layer_to_files.push((layer.to_owned(), new_layer));
-        //     }
-        // }
+        planner.split_threshold = 100;
 
-        self.layer_to_files.clone()
+
+        // insert fake ConexFile to planner
+        let mut files = Vec::new();
+        files.push(ConexFile {
+            path: PathBuf::from("/var/lib/docker/overlay2/123"),
+            relative_path: PathBuf::from("123"),
+            size: 100,
+            inode: 1,
+            hard_link_to: None,
+            ctime_nsec: 0,
+        });
+        files.push(ConexFile {
+            path: PathBuf::from("/var/lib/docker/overlay2/456"),
+            relative_path: PathBuf::from("456"),
+            size: 100,
+            inode: 2,
+            hard_link_to: None,
+            ctime_nsec: 0,
+        });
+        files.push(ConexFile {
+            path: PathBuf::from("/var/lib/docker/overlay2/789"),
+            relative_path: PathBuf::from("789"),
+            size: 100,
+            inode: 3,
+            hard_link_to: None,
+            ctime_nsec: 0,
+        });
+        
+
+        planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files));
+
+
+        let mut plan = planner.generate_plan();
+        assert_eq!(plan.len(), 3, "plan is: {:?}", plan);
+        let (_, t_files) = plan.pop().unwrap();
+        let mut c_files = t_files.clone();
+        assert_eq!(c_files.pop().unwrap().size, 100);
+        let (_, t_files) = plan.pop().unwrap();
+        let mut c_files = t_files.clone();
+        assert_eq!(c_files.pop().unwrap().size, 100);
+        let (holder, t_files) = plan.pop().unwrap();
+        let mut c_files = t_files.clone();
+        println!("layer name {}", holder);
+        assert_eq!(c_files.pop().unwrap().size, 100);
+    }
+    #[test]
+    fn test_merge_layers() {
+        let mut planner = ConexPlanner::default();
+
+        planner.split_threshold = 100;
+
+
+        // insert fake ConexFile to planner
+        let mut files = Vec::new();
+        files.push(ConexFile {
+            path: PathBuf::from("/var/lib/docker/overlay2/123"),
+            relative_path: PathBuf::from("123"),
+            size: 50,
+            inode: 1,
+            hard_link_to: None,
+            ctime_nsec: 0,
+        });
+        planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
+        planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
+
+
+        let mut plan = planner.generate_plan();
+        assert_eq!(plan.len(), 1, "plan is: {:?}", plan);
+        let (_, t_files) = plan.pop().unwrap();
+        let mut c_files = t_files.clone();
+        assert_eq!(c_files.pop().unwrap().size, 50);
+        assert_eq!(c_files.pop().unwrap().size, 50);
+    }
+    #[test]
+    fn test_fragment_layers() {
+        let mut planner = ConexPlanner::default();
+
+        planner.split_threshold = 50;
+
+
+        // insert fake ConexFile to planner
+        let mut files = Vec::new();
+        files.push(ConexFile {
+            path: PathBuf::from("/var/lib/docker/overlay2/123"),
+            relative_path: PathBuf::from("123"),
+            size: 100,
+            inode: 1,
+            hard_link_to: None,
+            ctime_nsec: 0,
+        });
+        
+        planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files));
+
+
+        let plan = planner.generate_plan();
+        assert_eq!(plan.len(), 2, "plan is: {:?}", plan);
+    }
+    #[test]
+    fn test_merge_then_fragment_layers() {
+        let mut planner = ConexPlanner::default();
+
+        planner.split_threshold = 75;
+
+
+        // insert fake ConexFile to planner
+        let mut files = Vec::new();
+        files.push(ConexFile {
+            path: PathBuf::from("/var/lib/docker/overlay2/123"),
+            relative_path: PathBuf::from("123"),
+            size: 50,
+            inode: 1,
+            hard_link_to: None,
+            ctime_nsec: 0,
+        });
+        
+        planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
+        planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
+
+
+        let mut plan = planner.generate_plan();
+        assert_eq!(plan.len(), 2, "plan is: {:?}", plan);
+        let (_, t_files) = plan.pop().unwrap();
+        let mut c_files = t_files.clone();
+        assert_eq!(c_files.pop().unwrap().size, 25);
+        let (_, t_files) = plan.pop().unwrap();
+        let mut c_files = t_files.clone();
+        assert_eq!(c_files.pop().unwrap().size, 25);
+        assert_eq!(c_files.pop().unwrap().size, 50);
+        
     }
 }
