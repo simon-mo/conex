@@ -1,46 +1,49 @@
 list:
     @just --list
 
+export port := "5555"
+
 run-registry:
     #!/usr/bin/env bash
-    docker run -p 5000:5000 --network=host \
+    docker run -p $port:$port --network=host \
         -v /tmp/registry-cache:/var/lib/registry \
+        -e REGISTRY_HTTP_ADDR=localhost:$port \
         -e REGISTRY_STORAGE=filesystem \
         -e REGISTRY_HEALTH_STORAGEDRIVER_ENABLED=false \
         -e REGISTRY_LOG_LEVEL=debug \
         registry:2
 
 set-permission:
-    sudo setfacl -R -m u:ubuntu:rwx /var/lib/docker/overlay2
+    sudo setfacl -R -m u:ethanxu:rwx /var/lib/docker/overlay2
 
 test-push:
     #!/usr/bin/env bash
     docker pull alpine
-    docker tag alpine localhost:5000/alpine
-    cargo run -- push localhost:5000/alpine
+    docker tag alpine localhost:$port/alpine
+    cargo run -- push localhost:$port/alpine
 
 test-push-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:5000/workload -f workloads/Dockerfile workloads
-    cargo run -- push localhost:5000/workload
+    docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
+    cargo run -- push localhost:$port/workload
 
 get-manifest:
     #!/usr/bin/env bash
-    curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:5000/v2/workload/manifests/latest | jq .
+    curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$port/v2/workload/manifests/latest | jq .
 
 get-config:
     #!/usr/bin/env bash
     set -ex
-    config_digest=$(curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:5000/v2/workload/manifests/latest | jq -r .config.digest)
-    curl localhost:5000/v2/workload/blobs/$config_digest | jq .
+    config_digest=$(curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$port/v2/workload/manifests/latest | jq -r .config.digest)
+    curl localhost:$port/v2/workload/blobs/$config_digest | jq .
 
 test-docker-pull:
-    docker pull localhost:5000/workload
-    docker run --rm localhost:5000/workload ls -l
+    docker pull localhost:$port/workload
+    docker run --rm localhost:$port/workload ls -l
 
 test-real-push-workload:
-    docker tag localhost:5000/workload simonmok/workload
+    docker tag localhost:$port/workload simonmok/workload
     cargo run -- push simonmok/workload
 
 test-real-push-alpine:
@@ -49,7 +52,7 @@ test-real-push-alpine:
     cargo run -- push simonmok/alpine
 
 test-pull-local:
-    cargo run -- --jobs 1 pull localhost:5000/workload
+    cargo run -- --jobs 1 pull localhost:$port/workload
 
 test-pull-hub:
     cargo build

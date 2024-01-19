@@ -8,10 +8,13 @@ use reqwest::Client;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
-use std::vec;
+use std::{vec, fs};
 use tar::{Builder as TarBuilder, EntryType, Header};
 
 use zstd::stream::write::Encoder as ZstdEncoder;
+//@ex
+use std::fs::{File, OpenOptions};
+
 pub struct BlockingWriter<T>
 where
     T: Write,
@@ -59,6 +62,10 @@ pub struct ConexUploader {
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
+/* @ex 
+    key: layer_id
+    files: list of ConextFiles within key layer 
+*/
 async fn upload_layer(
     client: Client,
     repo_info: RepoInfo,
@@ -86,6 +93,8 @@ async fn upload_layer(
                 bytes_written_tx.send(bytes_written).unwrap();
             })),
         );
+        
+        //@ex encoder calculates hash for compressed content in streaming fashion
         let encoder = ZstdEncoder::new(compressed_hasher, 0)
             .unwrap()
             .auto_finish();
@@ -154,6 +163,9 @@ async fn upload_layer(
         bytes_written_rx.blocking_recv().unwrap()
     });
 
+    //@ex does upload_tasks below only spawn one task throughout?
+    //    if so, what's the point of spawning an asynchronous task?
+
     // let client = client.clone();
     upload_tasks.spawn(async move {
         // Implementing the chunked upload protocol.
@@ -194,6 +206,25 @@ async fn upload_layer(
                     Err(count) => count,
                 }
             };
+            
+            /* @ex 
+                First attempt is serial: write blob locally, then upload 
+                TODO: spawn an async task for each of the step?
+            */
+            let open_file_result =
+                OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open("current_layer");
+
+            match open_file_result {
+                Ok(mut file) => {
+                    file.write_all(&send_buffer);
+                }
+                Err(e) => {
+                    println!("Error in opening file: {}", e);
+                }
+            }
 
             let streamer = ProgressStreamer::new(
                 progress_sender.clone(),
@@ -259,6 +290,11 @@ async fn upload_layer(
             .await
             .unwrap();
         assert!(upload_final_resp.status() == 201);
+
+        /* @ex
+           rename the layer file with proper hash
+        */
+        fs::rename("current_layer", hash).unwrap();
 
         start_offset
     });
