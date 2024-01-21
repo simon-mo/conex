@@ -19,6 +19,8 @@ pub struct ConexFile {
     pub inode: u64,
     pub hard_link_to: Option<PathBuf>,
     pub ctime_nsec: i64,
+    pub start_offset: Option<usize>,
+    pub chunk_size: Option<usize>,
 }
 
 impl ConexPlanner {
@@ -72,6 +74,8 @@ impl ConexPlanner {
                     inode: metadata.ino(),
                     hard_link_to: None,
                     ctime_nsec: metadata.ctime_nsec(),
+                    start_offset: None,
+                    chunk_size: None
                 });
             }
         }
@@ -104,27 +108,26 @@ impl ConexPlanner {
         let mut new_layer_to_files = Vec::new();
         let mut current_layer_size: usize = 0;
         let mut new_layer = Vec::new();
-        //let mut layer_counter = 0;
-        //let mut num_layers = 0;
         for (layer, files) in self.layer_to_files.iter() {
-            //num_layers +=1;
             for file in files.iter() {
                 let mut remainder_size = file.size;
-                //println!("File with size {}", remainder_size);
                 while remainder_size + current_layer_size >= self.split_threshold {
                     let mut frag = file.clone();
-                    frag.size = self.split_threshold - current_layer_size;
+                    frag.start_offset = Some(file.size - remainder_size);
+                    frag.chunk_size = Some(self.split_threshold - current_layer_size);
                     new_layer.push(frag.to_owned());
                     new_layer_to_files.push((layer.clone(), new_layer.clone()));
                     new_layer = Vec::new();
                     current_layer_size = 0;
-                    //layer_counter += 1;
-                    remainder_size -= frag.size;
-                    //println!("Layer created, frag size {}", frag.size);
+                    remainder_size -= frag.chunk_size.unwrap();
                 }
                 if remainder_size > 0 {
                     let mut frag = file.clone();
-                    frag.size = remainder_size;
+                    if remainder_size != file.size {
+                        //Case where remainder is a leftover fragment
+                        frag.chunk_size = Some(remainder_size);
+                        frag.start_offset = Some(file.size - remainder_size);
+                    }
                     new_layer.push(frag.to_owned());
                     current_layer_size += remainder_size;
                 }
@@ -135,7 +138,7 @@ impl ConexPlanner {
             //println!("last/first layer with size{}", new_layer.pop().unwrap().size.to_string());
             //layer_counter +=1;
         }
-       // println!("{} layers created from {} layers given, plan len {}",layer_counter,num_layers, new_layer_to_files.len());
+        //println!("{} layers created from {} layers given, plan len {}",layer_counter,num_layers, new_layer_to_files.len());
         new_layer_to_files.clone()
     }
 }
@@ -160,6 +163,8 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            start_offset: None,
+            chunk_size: None
         });
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/456"),
@@ -168,6 +173,8 @@ mod tests {
             inode: 2,
             hard_link_to: None,
             ctime_nsec: 0,
+            start_offset: None,
+            chunk_size: None
         });
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/789"),
@@ -176,6 +183,8 @@ mod tests {
             inode: 3,
             hard_link_to: None,
             ctime_nsec: 0,
+            start_offset: None,
+            chunk_size: None
         });
         
 
@@ -211,6 +220,8 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            start_offset: None,
+            chunk_size: None
         });
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
@@ -239,6 +250,8 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            start_offset: None,
+            chunk_size: None
         });
         
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files));
@@ -263,6 +276,8 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            start_offset: None,
+            chunk_size: None
         });
         
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
@@ -273,10 +288,10 @@ mod tests {
         assert_eq!(plan.len(), 2, "plan is: {:?}", plan);
         let (_, t_files) = plan.pop().unwrap();
         let mut c_files = t_files.clone();
-        assert_eq!(c_files.pop().unwrap().size, 25);
+        assert_eq!(c_files.pop().unwrap().chunk_size.unwrap(), 25);
         let (_, t_files) = plan.pop().unwrap();
         let mut c_files = t_files.clone();
-        assert_eq!(c_files.pop().unwrap().size, 25);
+        assert_eq!(c_files.pop().unwrap().chunk_size.unwrap(), 25);
         assert_eq!(c_files.pop().unwrap().size, 50);
         
     }

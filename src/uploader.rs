@@ -1,5 +1,6 @@
 use crate::hash::StreamingHashWriter;
 use crate::planner::ConexFile;
+use crate::planner::ConexPlanner;
 use crate::progress::{ProgressStreamer, ProgressWriter, UpdateItem};
 use crate::repo_info::RepoInfo;
 use bytes::Bytes;
@@ -12,6 +13,8 @@ use std::vec;
 use tar::{Builder as TarBuilder, EntryType, Header};
 use std::fs::File;
 use std::io::prelude::*;
+use std::fs;
+use std::path::PathBuf;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 pub struct BlockingWriter<T>
@@ -105,21 +108,33 @@ async fn upload_layer(
         );
         let mut tar_builder = TarBuilder::new(progress_writer);
         tar_builder.follow_symlinks(false);
-
         for file in files {
             let meta = &file.path.symlink_metadata().unwrap();
+            let start = file.start_offset.clone();
+            let mut end = None;
+            if file.start_offset.is_some() {
+                end = Some(start.unwrap() + file.chunk_size.unwrap());
+            }
             match file.hard_link_to {
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
                     header.set_metadata(meta);
                     header.set_size(0);
                     header.set_entry_type(EntryType::Link);
-                    tar_builder
-                        .append_link(&mut header, file.relative_path, hard_link_to)
+                    if file.start_offset.is_none() {
+                        tar_builder
+                        .append_link(&mut header, file.relative_path.clone(), hard_link_to)
                         .unwrap();
+                    } else {
+                        let frag = fs::read(file.relative_path.clone()).unwrap();
+                        let frag_slice = &frag[start.unwrap()..end.unwrap()];
+                        tar_builder
+                        .append_data(&mut header, file.relative_path.clone(), frag_slice)
+                        .unwrap();
+                    }
                 }
                 None => {
-                    let mut relative_path = file.relative_path.to_str().unwrap().to_string();
+                    let mut relative_path = file.relative_path.clone().to_str().unwrap().to_string();
                     if meta.is_dir()
                         // && !meta.is_symlink()
                         && !relative_path.is_empty()
@@ -136,16 +151,28 @@ async fn upload_layer(
                         // );
                         continue;
                     }
-                    tar_builder
-                        .append_path_with_name(&file.path, &relative_path)
-                        .unwrap_or_else(|e| {
-                            panic!(
-                                "Failed to add file {:?}, {}. Original error: {:?}",
-                                file.path, relative_path, e
-                            )
-                        });
+                    if file.start_offset.is_none() {
+                        tar_builder
+                            .append_path_with_name(&file.path, &relative_path)
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "Failed to add file {:?}, {}. Original error: {:?}",
+                                    file.path, relative_path, e
+                                )
+                            });
+                    } else {
+                        let frag = fs::read(file.relative_path.clone()).unwrap();
+                        let frag_slice = &frag[start.unwrap()..end.unwrap()];
+                        let mut header = Header::new_gnu();
+                        header.set_metadata(meta);
+                        header.set_size(0);
+                        header.set_entry_type(EntryType::Link);
+                        tar_builder
+                        .append_data(&mut header, file.relative_path.clone(), frag_slice)
+                        .unwrap();
+                    };
                 }
-            }
+                } 
         }
 
         tar_builder.finish().unwrap();
@@ -320,7 +347,6 @@ impl ConexUploader {
             .iter()
             .map(|(key, _)| key.clone())
             .collect::<Vec<String>>();
-
         let mut parallel_uploads = tokio::task::JoinSet::new();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs));
         plan.into_iter().for_each(|(layer_id, paths)| {
