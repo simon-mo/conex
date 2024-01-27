@@ -62,6 +62,12 @@ pub struct ConexUploader {
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 }
+struct SplitMetadata {
+    path: String,
+    start_offset: u32,
+    chunk_size: u32,
+    total_size: u64,
+}
 
 const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
 async fn upload_layer(
@@ -115,6 +121,7 @@ async fn upload_layer(
             if file.start_offset.is_some() {
                 end = Some(start.unwrap() + file.chunk_size.unwrap());
             }
+
             match file.hard_link_to {
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
@@ -151,28 +158,16 @@ async fn upload_layer(
                         // );
                         continue;
                     }
-                    if file.start_offset.is_none() {
-                        tar_builder
-                            .append_path_with_name(&file.path, &relative_path)
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "Failed to add file {:?}, {}. Original error: {:?}",
-                                    file.path, relative_path, e
-                                )
-                            });
-                    } else {
-                        let frag = fs::read(file.relative_path.clone()).unwrap();
-                        let frag_slice = &frag[start.unwrap()..end.unwrap()];
-                        let mut header = Header::new_gnu();
-                        header.set_metadata(meta);
-                        header.set_size(0);
-                        header.set_entry_type(EntryType::Link);
-                        tar_builder
-                        .append_data(&mut header, file.relative_path.clone(), frag_slice)
-                        .unwrap();
-                    };
+                    tar_builder
+                        .append_path_with_name(&file.path, &relative_path)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Failed to add file {:?}, {}. Original error: {:?}",
+                                file.path, relative_path, e
+                            )
+                        });
                 }
-                } 
+            } 
         }
 
         tar_builder.finish().unwrap();

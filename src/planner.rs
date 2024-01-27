@@ -111,25 +111,27 @@ impl ConexPlanner {
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
                 let mut remainder_size = file.size;
-                while remainder_size + current_layer_size >= self.split_threshold {
+                while remainder_size != 0 {
                     let mut frag = file.clone();
-                    frag.start_offset = Some(file.size - remainder_size);
-                    frag.chunk_size = Some(self.split_threshold - current_layer_size);
-                    new_layer.push(frag.to_owned());
-                    new_layer_to_files.push((layer.clone(), new_layer.clone()));
-                    new_layer = Vec::new();
-                    current_layer_size = 0;
-                    remainder_size -= frag.chunk_size.unwrap();
-                }
-                if remainder_size > 0 {
-                    let mut frag = file.clone();
-                    if remainder_size != file.size {
-                        //Case where remainder is a leftover fragment
-                        frag.chunk_size = Some(remainder_size);
+                    if frag.hard_link_to.is_none() || remainder_size + current_layer_size < self.split_threshold {
+                        if remainder_size != file.size {
+                            //Case where remainder is a leftover fragment
+                            frag.chunk_size = Some(remainder_size);
+                            frag.start_offset = Some(file.size - remainder_size);
+                        }
+                        new_layer.push(frag.to_owned());
+                        current_layer_size += remainder_size;
+                        break;
+                    } else {
+                        //Split file + layer
                         frag.start_offset = Some(file.size - remainder_size);
-                    }
-                    new_layer.push(frag.to_owned());
-                    current_layer_size += remainder_size;
+                        frag.chunk_size = Some(self.split_threshold - current_layer_size);
+                        new_layer.push(frag.to_owned());
+                        new_layer_to_files.push((layer.clone(), new_layer.clone()));
+                        new_layer = Vec::new();
+                        current_layer_size = 0;
+                        remainder_size -= frag.chunk_size.unwrap();
+                    } 
                 }
             }
         }
@@ -161,7 +163,7 @@ mod tests {
             relative_path: PathBuf::from("123"),
             size: 100,
             inode: 1,
-            hard_link_to: None,
+            hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
             start_offset: None,
             chunk_size: None
@@ -171,7 +173,7 @@ mod tests {
             relative_path: PathBuf::from("456"),
             size: 100,
             inode: 2,
-            hard_link_to: None,
+            hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
             start_offset: None,
             chunk_size: None
@@ -181,7 +183,7 @@ mod tests {
             relative_path: PathBuf::from("789"),
             size: 100,
             inode: 3,
-            hard_link_to: None,
+            hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
             start_offset: None,
             chunk_size: None
@@ -218,7 +220,7 @@ mod tests {
             relative_path: PathBuf::from("123"),
             size: 50,
             inode: 1,
-            hard_link_to: None,
+            hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
             start_offset: None,
             chunk_size: None
@@ -248,7 +250,7 @@ mod tests {
             relative_path: PathBuf::from("123"),
             size: 100,
             inode: 1,
-            hard_link_to: None,
+            hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
             start_offset: None,
             chunk_size: None
@@ -274,7 +276,7 @@ mod tests {
             relative_path: PathBuf::from("123"),
             size: 50,
             inode: 1,
-            hard_link_to: None,
+            hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
             start_offset: None,
             chunk_size: None
