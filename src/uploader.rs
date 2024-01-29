@@ -71,6 +71,7 @@ async fn upload_layer(
     files: Vec<ConexFile>,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
     mut open_file: File,
+    local_blobs_dir: PathBuf,
 ) -> Descriptor {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
@@ -274,10 +275,12 @@ async fn upload_layer(
             .unwrap();
         assert!(upload_final_resp.status() == 201);
 
-        /* @ex
-           rename the layer file with proper hash
-        */
-        fs::rename("current_layer", hash).unwrap();
+        // rename the layer file with proper hash
+        let mut old_file = local_blobs_dir.clone();
+        old_file.push(key.clone());
+        let mut new_file = local_blobs_dir.clone();
+        new_file.push(hash.clone());
+        fs::rename(old_file, new_file).unwrap();
 
         start_offset
     });
@@ -344,9 +347,9 @@ impl ConexUploader {
             let progress_sender = self.progress_sender.clone();
 
             // Create the directory to locally save blobs
-            let mut blobs_path = self.local_image_path.clone();
-            blobs_path.push("blobs/sha256");
-            match fs::create_dir_all(blobs_path.clone()) {
+            let mut blobs_dir = self.local_image_path.clone();
+            blobs_dir.push("blobs/sha256");
+            match fs::create_dir_all(blobs_dir.clone()) {
                 Ok(_) => {}
                 Err(err) => {
                     panic!("Failed to create directory within {}. Original error: {}", self.local_image_path.display(), err);
@@ -355,7 +358,7 @@ impl ConexUploader {
 
             parallel_uploads.spawn(async move {
                 // Create a file to write archive of current layer
-                let mut layer_path = blobs_path.clone();
+                let mut layer_path = blobs_dir.clone();
                 layer_path.push(layer_id.clone());
 
                 let mut open_file =
@@ -376,6 +379,7 @@ impl ConexUploader {
                     paths.clone(),
                     progress_sender,
                     open_file,
+                    blobs_dir.clone(),
                 )
                 .await;
 
