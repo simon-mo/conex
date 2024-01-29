@@ -3,7 +3,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
 use oci_spec::image::Descriptor;
 use reqwest::{Client, RequestBuilder};
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
 use tracing::info;
 
 use crate::{
@@ -49,11 +49,11 @@ impl ContainerPusher {
             client: Client::new(),
         }
     }
-    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool) {
+    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, local_image_path: PathBuf) {
         let repo_info = RepoInfo::from_string(source_image.clone()).await;
 
         let mut layer_descriptors = self
-            .push_blobs(repo_info.clone(), jobs, show_progress)
+            .push_blobs(repo_info.clone(), jobs, show_progress, local_image_path.clone())
             .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
         let config_descriptor = self
@@ -209,6 +209,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         jobs: usize,
         show_progress: bool,
+        local_image_path: PathBuf,
     ) -> Vec<Descriptor> {
         let image_info = self
             .docker
@@ -229,6 +230,10 @@ impl ContainerPusher {
                     Some(lower_dir) => lower_dir.split(':').map(|s| s.to_owned()).collect(),
                     None => Vec::new(),
                 };
+
+                println!("upper layer: {}", upper_layer);
+                println!("lower layers: {:?}", lower_layers);
+
                 vec![upper_layer].into_iter().chain(lower_layers).collect()
             } else if graph_driver.name == "conex" {
                 let store = DataStore::new(METADATA_DB_PATH.into());
@@ -262,7 +267,8 @@ impl ContainerPusher {
                                 None
                             }
                         };
-
+                        
+                        //@ex unclear to me what this is doing with each layer diff_id: isn't diff_id already the sha?
                         info!("Option 1: {:?}, Option 2: {:?}", sha_option_1, sha_option_2);
 
                         sha_option_1.or(sha_option_2).unwrap()
@@ -313,7 +319,7 @@ impl ContainerPusher {
             })
             .collect::<Vec<(String, usize)>>();
         info!("Layer sizes: {:?}", layers_to_size);
-        let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx);
+        let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx, local_image_path.clone());
         let upload_task = tokio::spawn(async move { uploader.upload(plan, jobs).await });
 
         if show_progress {

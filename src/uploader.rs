@@ -12,8 +12,9 @@ use std::{vec, fs};
 use tar::{Builder as TarBuilder, EntryType, Header};
 
 use zstd::stream::write::Encoder as ZstdEncoder;
-//@ex
+
 use std::fs::{File, OpenOptions};
+use std::path::PathBuf;
 
 pub struct BlockingWriter<T>
 where
@@ -59,19 +60,17 @@ pub struct ConexUploader {
     client: Client,
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+    local_image_path: PathBuf,
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
-/* @ex 
-    key: layer_id
-    files: list of ConextFiles within key layer 
-*/
 async fn upload_layer(
     client: Client,
     repo_info: RepoInfo,
     key: String,
     files: Vec<ConexFile>,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+    mut open_file: File,
 ) -> Descriptor {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
@@ -94,7 +93,6 @@ async fn upload_layer(
             })),
         );
         
-        //@ex encoder calculates hash for compressed content in streaming fashion
         let encoder = ZstdEncoder::new(compressed_hasher, 0)
             .unwrap()
             .auto_finish();
@@ -163,9 +161,6 @@ async fn upload_layer(
         bytes_written_rx.blocking_recv().unwrap()
     });
 
-    //@ex does upload_tasks below only spawn one task throughout?
-    //    if so, what's the point of spawning an asynchronous task?
-
     // let client = client.clone();
     upload_tasks.spawn(async move {
         // Implementing the chunked upload protocol.
@@ -207,22 +202,10 @@ async fn upload_layer(
                 }
             };
             
-            /* @ex 
-                First attempt is serial: write blob locally, then upload 
-                TODO: spawn an async task for each of the step?
-            */
-            let open_file_result =
-                OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open("current_layer");
-
-            match open_file_result {
-                Ok(mut file) => {
-                    file.write_all(&send_buffer);
-                }
-                Err(e) => {
-                    println!("Error in opening file: {}", e);
+            match open_file.write_all(&send_buffer) {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
                 }
             }
 
@@ -332,11 +315,13 @@ impl ConexUploader {
         client: Client,
         repo_info: RepoInfo,
         progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+        local_image_path: PathBuf,
     ) -> Self {
         Self {
             client,
             repo_info,
             progress_sender,
+            local_image_path,
         }
     }
 
@@ -357,7 +342,32 @@ impl ConexUploader {
             let client = self.client.clone();
             let repo_info = self.repo_info.clone();
             let progress_sender = self.progress_sender.clone();
+
+            // Create the directory to locally save blobs
+            let mut blobs_path = self.local_image_path.clone();
+            blobs_path.push("blobs/sha256");
+            match fs::create_dir_all(blobs_path.clone()) {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Failed to create directory within {}. Original error: {}", self.local_image_path.display(), err);
+                }
+            }
+
             parallel_uploads.spawn(async move {
+                // Create a file to write archive of current layer
+                let mut layer_path = blobs_path.clone();
+                layer_path.push(layer_id.clone());
+
+                let mut open_file =
+                OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(layer_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create file {}. Original error: {}", layer_path.display(), err);
+                });
+
                 let permit = semaphore.acquire().await;
                 let content_hash = upload_layer(
                     client,
@@ -365,6 +375,7 @@ impl ConexUploader {
                     layer_id.clone(),
                     paths.clone(),
                     progress_sender,
+                    open_file,
                 )
                 .await;
 

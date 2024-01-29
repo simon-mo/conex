@@ -15,6 +15,8 @@ use puller::ContainerPuller;
 use pusher::ContainerPusher;
 use snapshotter::serve_snapshotter;
 use tracing::info;
+use std::env;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Sky Container", version, about, long_about = None)]
@@ -38,6 +40,13 @@ struct Args {
         default_value = "false"
     )]
     no_progress: bool,
+
+    #[clap(
+        long,
+        short,
+        help = "Set the location on disk to save the OCI image at, default to the current working directory",
+    )]
+    local_image_path: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -83,11 +92,15 @@ async fn main() {
 
     let show_progress = !args.no_progress;
 
+    // TODO: validate the passed-in path
+    let local_image_path = args.local_image_path.unwrap_or_else( || {env::current_dir().unwrap()});
+    info!("Saving OCI image locally at: {}", local_image_path.display());
+
     match args.command {
         Commands::Push { name } => {
             println!("Pushing container: {:?}", name);
             let pusher = ContainerPusher::new(docker);
-            pusher.push(name, jobs, show_progress).await;
+            pusher.push(name, jobs, show_progress, local_image_path).await;
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);

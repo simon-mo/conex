@@ -2,8 +2,6 @@ list:
     @just --list
 
 export port := "5555"
-testex:
-    echo $port
 
 run-registry:
     #!/usr/bin/env bash
