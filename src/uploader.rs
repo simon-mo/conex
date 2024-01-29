@@ -64,6 +64,10 @@ pub struct ConexUploader {
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
+/* @ex 
+    key: layer_id
+    files: list of ConextFiles within key layer 
+*/
 async fn upload_layer(
     client: Client,
     repo_info: RepoInfo,
@@ -161,6 +165,9 @@ async fn upload_layer(
 
         bytes_written_rx.blocking_recv().unwrap()
     });
+
+    //@ex does upload_tasks below only spawn one task throughout?
+    //    if so, what's the point of spawning an asynchronous task?
 
     // let client = client.clone();
     upload_tasks.spawn(async move {
