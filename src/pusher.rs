@@ -268,7 +268,7 @@ impl ContainerPusher {
                             }
                         };
                         
-                        //@ex unclear to me what this is doing with each layer diff_id: isn't diff_id already the sha?
+                        // Note(ex) unclear to me what this is doing with each layer diff_id: isn't diff_id already the sha?
                         info!("Option 1: {:?}, Option 2: {:?}", sha_option_1, sha_option_2);
 
                         sha_option_1.or(sha_option_2).unwrap()
