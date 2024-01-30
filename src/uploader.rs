@@ -146,10 +146,11 @@ async fn upload_layer(
                         let mut metadata_header = Header::new_gnu();
                         metadata_header.set_size(metadata_json_bytes.len() as u64);
                         metadata_header.set_cksum();
+                        let rel_path = file.relative_path.to_str().unwrap().to_string();
                         tar_builder
                             .append_data(
                                 &mut metadata_header,
-                                format!("{}.split-metadata.{}.json", path.clone(), file.segment_idx.unwrap().clone()),
+                                format!("{}.split-metadata.{}.json", rel_path, file.segment_idx.unwrap().clone()),
                                 metadata_json_bytes,
                             )
                             .unwrap();
@@ -164,17 +165,19 @@ async fn upload_layer(
                         let mut chunk_header = Header::new_gnu();
                         chunk_header.set_size(file.chunk_size.unwrap() as u64);
                         chunk_header.set_entry_type(tar::EntryType::Regular);
-                        chunk_header.set_path(&path).unwrap();
+                        chunk_header.set_path(&rel_path).unwrap();
                         chunk_header.set_uid(meta.clone().uid().into());
                         chunk_header.set_gid(meta.clone().gid().into());
                         chunk_header.set_cksum();
                         //let mut chunk_data = entry.take(chunk_size as u64);
                         //Is it okay to do this + memory inefficient?
                         let mut hard_file = File::open(path.clone()).unwrap();
-                        let mut buffer = Vec::with_capacity(file.size);
-                        let _ = hard_file.read_exact(&mut buffer);
+                        let mut buffer = Vec::new();
+                        let _ = hard_file.read_to_end(&mut buffer);
                         let start = file.start_offset.unwrap();
                         let end = start + file.chunk_size.unwrap();
+                        assert!(start <= end);
+                        assert!(end <= file.size);
                         let mut chunk_data = &buffer[start..end];
                         tar_builder
                             .append(&chunk_header, &mut chunk_data)

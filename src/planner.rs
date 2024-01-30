@@ -28,7 +28,8 @@ impl ConexPlanner {
     pub fn default() -> Self {
         Self {
             layer_to_files: Vec::new(),
-            split_threshold: 512 * 1024 * 1024,
+            //30 mb threshold
+            split_threshold: 30 * 1024 * 1024,
         }
     }
 
@@ -55,6 +56,7 @@ impl ConexPlanner {
         queue.push_back(PathBuf::new());
 
         let mut file_metadata_vec = Vec::new();
+        let mut total_size = 0;
 
         while let Some(current_path) = queue.pop_front() {
             let absolute_path = base_path.join(&current_path);
@@ -67,7 +69,7 @@ impl ConexPlanner {
                 if entry.path().is_dir() && !metadata.is_symlink() {
                     queue.push_back(relative_path.to_owned());
                 }
-
+                total_size += metadata.len() as usize;
                 file_metadata_vec.push(ConexFile {
                     path: entry.path(),
                     relative_path,
@@ -79,6 +81,7 @@ impl ConexPlanner {
                 });
             }
         }
+        println!("ingested total size {}",total_size.to_string());
 
         self.layer_to_files
             .push((dir_path.to_owned(), file_metadata_vec));
@@ -108,20 +111,28 @@ impl ConexPlanner {
         let mut new_layer_to_files = Vec::new();
         let mut current_layer_size: usize = 0;
         let mut new_layer = Vec::new();
+        let mut num_layer = 0;
+        let mut total_size = 0;
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
+                total_size += file.size;
                 let mut segment_idx = 0;
                 let mut remainder_size = file.size;
                 while remainder_size != 0 {
+                    //println!("remainder size {}",remainder_size.to_string());
                     let mut frag = file.clone();
                     if frag.hard_link_to.is_none() || remainder_size + current_layer_size < self.split_threshold {
                         if remainder_size != file.size {
                             //Case where remainder is a leftover fragment
                             frag.chunk_size = Some(remainder_size);
                             frag.start_offset = Some(file.size - remainder_size);
+                            frag.segment_idx = Some(segment_idx);
                         }
                         new_layer.push(frag.to_owned());
-                        current_layer_size += remainder_size;
+                        if frag.hard_link_to.is_some() {
+                            //soft links don't count
+                            current_layer_size += remainder_size;
+                        }
                         break;
                     } else {
                         //Split file + layer
@@ -129,7 +140,12 @@ impl ConexPlanner {
                         frag.chunk_size = Some(self.split_threshold - current_layer_size);
                         frag.segment_idx = Some(segment_idx);
                         new_layer.push(frag.to_owned());
-                        new_layer_to_files.push((layer.clone(), new_layer.clone()));
+                        //let sl = segment_idx.to_string();
+                        //let name = layer.clone()+&sl + &samp.to_string();
+                        let name = num_layer.to_string();
+                        println!("layer size {}",current_layer_size.to_string());
+                        new_layer_to_files.push((name, new_layer.clone()));
+                        num_layer +=1;
                         new_layer = Vec::new();
                         current_layer_size = 0;
                         remainder_size -= frag.chunk_size.unwrap();
@@ -143,14 +159,9 @@ impl ConexPlanner {
             //println!("last/first layer with size{}", new_layer.pop().unwrap().size.to_string());
             //layer_counter +=1;
         }
-        //println!("{} layers created from {} layers given, plan len {}",layer_counter,num_layers, new_layer_to_files.len());
+        println!("total size {}",total_size.to_string());
+        println!("plan len {}",new_layer_to_files.len());
         new_layer_to_files.clone()
-    }
-}
-
-impl ConexFile {
-    fn new() {
-
     }
 }
 // unit test module
