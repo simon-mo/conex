@@ -81,7 +81,7 @@ impl ConexPlanner {
                 });
             }
         }
-        println!("ingested total size {}",total_size.to_string());
+        //println!("ingested total size {}",total_size.to_string());
 
         self.layer_to_files
             .push((dir_path.to_owned(), file_metadata_vec));
@@ -143,7 +143,7 @@ impl ConexPlanner {
                         //let sl = segment_idx.to_string();
                         //let name = layer.clone()+&sl + &samp.to_string();
                         let name = num_layer.to_string();
-                        println!("layer size {}",current_layer_size.to_string());
+                        //println!("layer size {}",current_layer_size.to_string());
                         new_layer_to_files.push((name, new_layer.clone()));
                         num_layer +=1;
                         new_layer = Vec::new();
@@ -159,8 +159,8 @@ impl ConexPlanner {
             //println!("last/first layer with size{}", new_layer.pop().unwrap().size.to_string());
             //layer_counter +=1;
         }
-        println!("total size {}",total_size.to_string());
-        println!("plan len {}",new_layer_to_files.len());
+        //println!("total size {}",total_size.to_string());
+        //println!("plan len {}",new_layer_to_files.len());
         new_layer_to_files.clone()
     }
 }
