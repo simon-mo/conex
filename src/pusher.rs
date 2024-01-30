@@ -5,6 +5,8 @@ use oci_spec::image::Descriptor;
 use reqwest::{Client, RequestBuilder};
 use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
 use tracing::info;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 
 use crate::{
     data_store::DataStore,
@@ -57,7 +59,7 @@ impl ContainerPusher {
             .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
         let config_descriptor = self
-            .push_config(repo_info.clone(), layer_descriptors.clone())
+            .push_config(repo_info.clone(), layer_descriptors.clone(), local_image_path.clone())
             .await;
         self.push_manifest(repo_info.clone(), config_descriptor, layer_descriptors)
             .await;
@@ -67,6 +69,7 @@ impl ContainerPusher {
         &self,
         repo_info: RepoInfo,
         layer_descriptors: Vec<Descriptor>,
+        local_image_path: PathBuf,
     ) -> Descriptor {
         // Upload the config
         let image_info = self
@@ -128,6 +131,26 @@ impl ContainerPusher {
             ring::digest::digest(&ring::digest::SHA256, serialized_config.as_bytes()).as_ref(),
         );
         let content_length = serialized_config.len();
+
+        let mut config_path = local_image_path.clone();
+        config_path.push("blobs/sha256");
+        config_path.push(sha256_hash.clone());
+
+        let mut open_file =
+            OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(config_path.clone())
+            .unwrap_or_else(|err| {
+                panic!("Failed to create config file {}. Original error: {}", config_path.display(), err);
+            });
+        match open_file.write_all(serialized_config.as_bytes()) {
+            Ok(_) => {}
+            Err(err) => {
+                panic!("Failed to write config to file: {}. Original error: {}", config_path.display(), err);
+            }
+        };
+
         let resp = self
             .client
             .execute({

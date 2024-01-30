@@ -362,14 +362,14 @@ impl ConexUploader {
                 layer_path.push(layer_id.clone());
 
                 let mut open_file =
-                OpenOptions::new()
-                .create(true)
-                .write(true)
-                .append(true)
-                .open(layer_path.clone())
-                .unwrap_or_else(|err| {
-                    panic!("Failed to create file {}. Original error: {}", layer_path.display(), err);
-                });
+                    OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .append(true)
+                    .open(layer_path.clone())
+                    .unwrap_or_else(|err| {
+                        panic!("Failed to create file {}. Original error: {}", layer_path.display(), err);
+                    });
 
                 let permit = semaphore.acquire().await;
                 let content_hash = upload_layer(
