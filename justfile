@@ -3,9 +3,6 @@ set dotenv-load
 list:
     @just --list
 
-testex:
-    @echo "docker port: $DOCKER_PORT"
-
 run-registry:
     #!/usr/bin/env bash
     docker run -p $DOCKER_PORT:$DOCKER_PORT --network=host \
