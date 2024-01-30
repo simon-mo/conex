@@ -11,7 +11,7 @@ pub struct ConexPlanner {
     pub split_threshold: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ConexFile {
     pub path: PathBuf,
     pub relative_path: PathBuf,
@@ -21,6 +21,7 @@ pub struct ConexFile {
     pub ctime_nsec: i64,
     pub start_offset: Option<usize>,
     pub chunk_size: Option<usize>,
+    pub segment_idx: Option<usize>
 }
 
 impl ConexPlanner {
@@ -74,8 +75,7 @@ impl ConexPlanner {
                     inode: metadata.ino(),
                     hard_link_to: None,
                     ctime_nsec: metadata.ctime_nsec(),
-                    start_offset: None,
-                    chunk_size: None
+                    ..Default::default()
                 });
             }
         }
@@ -110,6 +110,7 @@ impl ConexPlanner {
         let mut new_layer = Vec::new();
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
+                let mut segment_idx = 0;
                 let mut remainder_size = file.size;
                 while remainder_size != 0 {
                     let mut frag = file.clone();
@@ -126,11 +127,13 @@ impl ConexPlanner {
                         //Split file + layer
                         frag.start_offset = Some(file.size - remainder_size);
                         frag.chunk_size = Some(self.split_threshold - current_layer_size);
+                        frag.segment_idx = Some(segment_idx);
                         new_layer.push(frag.to_owned());
                         new_layer_to_files.push((layer.clone(), new_layer.clone()));
                         new_layer = Vec::new();
                         current_layer_size = 0;
                         remainder_size -= frag.chunk_size.unwrap();
+                        segment_idx +=1
                     } 
                 }
             }
@@ -145,6 +148,11 @@ impl ConexPlanner {
     }
 }
 
+impl ConexFile {
+    fn new() {
+
+    }
+}
 // unit test module
 #[cfg(test)]
 mod tests {
@@ -165,8 +173,7 @@ mod tests {
             inode: 1,
             hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
-            start_offset: None,
-            chunk_size: None
+            ..Default::default()
         });
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/456"),
@@ -175,8 +182,7 @@ mod tests {
             inode: 2,
             hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
-            start_offset: None,
-            chunk_size: None
+            ..Default::default()
         });
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/789"),
@@ -185,8 +191,7 @@ mod tests {
             inode: 3,
             hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
-            start_offset: None,
-            chunk_size: None
+            ..Default::default()
         });
         
 
@@ -222,8 +227,7 @@ mod tests {
             inode: 1,
             hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
-            start_offset: None,
-            chunk_size: None
+            ..Default::default()
         });
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
@@ -252,8 +256,7 @@ mod tests {
             inode: 1,
             hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
-            start_offset: None,
-            chunk_size: None
+            ..Default::default()
         });
         
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files));
@@ -278,8 +281,7 @@ mod tests {
             inode: 1,
             hard_link_to: Some(PathBuf::new()),
             ctime_nsec: 0,
-            start_offset: None,
-            chunk_size: None
+            ..Default::default()
         });
         
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));

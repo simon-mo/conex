@@ -8,6 +8,7 @@ use oci_spec::image::Descriptor;
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::vec;
 use tar::{Builder as TarBuilder, EntryType, Header};
@@ -15,6 +16,8 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::fs;
 use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::fs::Metadata;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 pub struct BlockingWriter<T>
@@ -62,6 +65,8 @@ pub struct ConexUploader {
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct SplitMetadata {
     path: String,
     start_offset: u32,
@@ -115,17 +120,11 @@ async fn upload_layer(
         let mut tar_builder = TarBuilder::new(progress_writer);
         tar_builder.follow_symlinks(false);
         for file in files {
-            let meta = &file.path.symlink_metadata().unwrap();
-            let start = file.start_offset.clone();
-            let mut end = None;
-            if file.start_offset.is_some() {
-                end = Some(start.unwrap() + file.chunk_size.unwrap());
-            }
-
+            let meta = file.path.symlink_metadata().unwrap().clone();
             match file.hard_link_to {
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
-                    header.set_metadata(meta);
+                    header.set_metadata(&meta.clone());
                     header.set_size(0);
                     header.set_entry_type(EntryType::Link);
                     if file.start_offset.is_none() {
@@ -133,11 +132,53 @@ async fn upload_layer(
                         .append_link(&mut header, file.relative_path.clone(), hard_link_to)
                         .unwrap();
                     } else {
-                        let frag = fs::read(file.relative_path.clone()).unwrap();
-                        let frag_slice = &frag[start.unwrap()..end.unwrap()];
+                        let path = file.path.to_str().unwrap().to_string();
+                        //Write fragment metadata into tar
+                        let split_metadata = SplitMetadata {
+                            path: path.clone(),
+                            start_offset: file.start_offset.unwrap() as u32,
+                            chunk_size: file.chunk_size.unwrap() as u32,
+                            total_size: file.size as u64,
+                        };
+                        let metadata_json = serde_json::to_string(&split_metadata).unwrap();
+                        let metadata_json_bytes = metadata_json.as_bytes();
+    
+                        let mut metadata_header = Header::new_gnu();
+                        metadata_header.set_size(metadata_json_bytes.len() as u64);
+                        metadata_header.set_cksum();
                         tar_builder
-                        .append_data(&mut header, file.relative_path.clone(), frag_slice)
-                        .unwrap();
+                            .append_data(
+                                &mut metadata_header,
+                                format!("{}.split-metadata.{}.json", path.clone(), file.segment_idx.unwrap().clone()),
+                                metadata_json_bytes,
+                            )
+                            .unwrap();
+
+                        //File header
+                        let mut header = Header::new_gnu();
+                        header.set_metadata(&meta.clone());
+                        header.set_size(0);
+                        header.set_entry_type(EntryType::Link);
+
+                        //Write fragment into tar
+                        let mut chunk_header = Header::new_gnu();
+                        chunk_header.set_size(file.chunk_size.unwrap() as u64);
+                        chunk_header.set_entry_type(tar::EntryType::Regular);
+                        chunk_header.set_path(&path).unwrap();
+                        chunk_header.set_uid(meta.clone().uid().into());
+                        chunk_header.set_gid(meta.clone().gid().into());
+                        chunk_header.set_cksum();
+                        //let mut chunk_data = entry.take(chunk_size as u64);
+                        //Is it okay to do this + memory inefficient?
+                        let mut hard_file = File::open(path.clone()).unwrap();
+                        let mut buffer = Vec::with_capacity(file.size);
+                        let _ = hard_file.read_exact(&mut buffer);
+                        let start = file.start_offset.unwrap();
+                        let end = start + file.chunk_size.unwrap();
+                        let mut chunk_data = &buffer[start..end];
+                        tar_builder
+                            .append(&chunk_header, &mut chunk_data)
+                            .unwrap();
                     }
                 }
                 None => {
