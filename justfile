@@ -28,6 +28,12 @@ test-push-workload:
     docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
     cargo run -- push localhost:$port/workload
 
+test-local-write:
+    #!/usr/bin/env bash
+    set -ex
+    docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
+    cargo run -- --local-image-path "/home/ethanxu/conex" push localhost:$port/workload
+
 get-manifest:
     #!/usr/bin/env bash
     curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$port/v2/workload/manifests/latest | jq .

@@ -51,7 +51,7 @@ impl ContainerPusher {
             client: Client::new(),
         }
     }
-    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, local_image_path: PathBuf) {
+    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, local_image_path: Option<PathBuf>) {
         let repo_info = RepoInfo::from_string(source_image.clone()).await;
 
         let mut layer_descriptors = self
@@ -69,7 +69,7 @@ impl ContainerPusher {
         &self,
         repo_info: RepoInfo,
         layer_descriptors: Vec<Descriptor>,
-        local_image_path: PathBuf,
+        local_image_path: Option<PathBuf>,
     ) -> Descriptor {
         // Upload the config
         let image_info = self
@@ -132,24 +132,26 @@ impl ContainerPusher {
         );
         let content_length = serialized_config.len();
 
-        let mut config_path = local_image_path.clone();
-        config_path.push("blobs/sha256");
-        config_path.push(sha256_hash.clone());
+        if let Some(_) = local_image_path {
+            let mut config_path = local_image_path.clone().unwrap();
+            config_path.push("blobs/sha256");
+            config_path.push(sha256_hash.clone());
 
-        let mut open_file =
-            OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(config_path.clone())
-            .unwrap_or_else(|err| {
-                panic!("Failed to create config file {}. Original error: {}", config_path.display(), err);
-            });
-        match open_file.write_all(serialized_config.as_bytes()) {
-            Ok(_) => {}
-            Err(err) => {
-                panic!("Failed to write config to file: {}. Original error: {}", config_path.display(), err);
-            }
-        };
+            let mut open_file =
+                OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(config_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create config file {}. Original error: {}", config_path.display(), err);
+                });
+            match open_file.write_all(serialized_config.as_bytes()) {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Failed to write config to file: {}. Original error: {}", config_path.display(), err);
+                }
+            };
+        }
 
         let resp = self
             .client
@@ -189,7 +191,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         config_descriptor: Descriptor,
         layer_descriptors: Vec<Descriptor>,
-        local_image_path: PathBuf,
+        local_image_path: Option<PathBuf>,
     ) {
         let manifest = oci_spec::image::ImageManifestBuilder::default()
             .schema_version(oci_spec::image::SCHEMA_VERSION)
@@ -205,24 +207,27 @@ impl ContainerPusher {
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
 
-        let mut manifest_path = local_image_path.clone();
-        manifest_path.push("blobs/sha256");
-        manifest_path.push(sha256_hash.clone());
+        if let Some(_) = local_image_path {
+            let mut manifest_path = local_image_path.clone().unwrap();
+            manifest_path.push("blobs/sha256");
+            manifest_path.push(sha256_hash.clone());
+    
+            let mut open_file =
+                OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(manifest_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create manifest file {}. Original error: {}", manifest_path.display(), err);
+                });
+            match open_file.write_all(serialized_manifest.as_bytes()) {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Failed to write manifest to file: {}. Original error: {}", manifest_path.display(), err);
+                }
+            };
+        }
 
-        let mut open_file =
-            OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(manifest_path.clone())
-            .unwrap_or_else(|err| {
-                panic!("Failed to create manifest file {}. Original error: {}", manifest_path.display(), err);
-            });
-        match open_file.write_all(serialized_manifest.as_bytes()) {
-            Ok(_) => {}
-            Err(err) => {
-                panic!("Failed to write manifest to file: {}. Original error: {}", manifest_path.display(), err);
-            }
-        };
 
         for tag in &[
             repo_info.reference.tag().unwrap_or("latest"),
@@ -252,7 +257,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         jobs: usize,
         show_progress: bool,
-        local_image_path: PathBuf,
+        local_image_path: Option<PathBuf>,
     ) -> Vec<Descriptor> {
         let image_info = self
             .docker

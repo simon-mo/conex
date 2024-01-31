@@ -93,8 +93,7 @@ async fn main() {
     let show_progress = !args.no_progress;
 
     // TODO: validate the passed-in path
-    let local_image_path = args.local_image_path.unwrap_or_else( || {env::current_dir().unwrap()});
-    info!("Saving OCI image locally at: {}", local_image_path.display());
+    let local_image_path = args.local_image_path;
 
     match args.command {
         Commands::Push { name } => {

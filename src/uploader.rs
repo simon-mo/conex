@@ -60,7 +60,7 @@ pub struct ConexUploader {
     client: Client,
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
-    local_image_path: PathBuf,
+    local_image_path: Option<PathBuf>,
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
@@ -70,8 +70,7 @@ async fn upload_layer(
     key: String,
     files: Vec<ConexFile>,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
-    mut open_file: File,
-    local_layer_path: PathBuf,
+    local_layer_path: Option<PathBuf>,
 ) -> Descriptor {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
@@ -202,11 +201,24 @@ async fn upload_layer(
                     Err(count) => count,
                 }
             };
-            
-            match open_file.write_all(&send_buffer) {
-                Ok(_) => {}
-                Err(err) => {
-                    panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
+
+            if let Some(_) = local_layer_path.clone() {
+                let save_layer_path = local_layer_path.clone().unwrap();
+
+                let mut open_file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .append(true)
+                    .open(save_layer_path.clone())
+                    .unwrap_or_else(|err| {
+                        panic!("Failed to create file {}. Original error: {}", save_layer_path.display(), err);
+                    });
+
+                match open_file.write_all(&send_buffer) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
+                    }
                 }
             }
 
@@ -276,10 +288,12 @@ async fn upload_layer(
         assert!(upload_final_resp.status() == 201);
 
         // rename the layer file with proper hash
-        let mut renamed_file = local_layer_path.clone();
-        renamed_file.pop();
-        renamed_file.push(hash.clone());
-        fs::rename(local_layer_path, renamed_file).unwrap();
+        if let Some(_) = local_layer_path.clone() {
+            let mut renamed_file = local_layer_path.clone().unwrap();
+            renamed_file.pop();
+            renamed_file.push(hash.clone());
+            fs::rename(local_layer_path.unwrap(), renamed_file).unwrap();
+        }
 
         start_offset
     });
@@ -317,7 +331,7 @@ impl ConexUploader {
         client: Client,
         repo_info: RepoInfo,
         progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
-        local_image_path: PathBuf,
+        local_image_path: Option<PathBuf>,
     ) -> Self {
         Self {
             client,
@@ -347,32 +361,32 @@ impl ConexUploader {
             let progress_sender = self.progress_sender.clone();
 
             // Create the directory to locally save blobs
-            let mut blobs_dir = self.local_image_path.clone();
-            blobs_dir.push("blobs/sha256");
-            match fs::create_dir_all(blobs_dir.clone()) {
-                Ok(_) => {}
-                Err(err) => {
-                    panic!("Failed to create directory within {}. Original error: {}", self.local_image_path.display(), err);
+            let blobs_dir = match self.local_image_path {
+                Some(_) => {
+                    let mut save_image_path = self.local_image_path.clone().unwrap();
+                    save_image_path.push("blobs/sha256");
+                    match fs::create_dir_all(save_image_path.clone()) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            panic!("Failed to create directory within {}. Original error: {}", save_image_path.display(), err);
+                        }
+                    }
+                    Some(save_image_path)
                 }
-            }
+                None => {None}
+            };         
 
             parallel_uploads.spawn(async move {
                 // Create a file to write archive of current layer
-                let mut layer_path = blobs_dir.clone();
-                println!("Layer path: {}", layer_path.display());
-                println!("Task id: {}", index.clone());
-                layer_path.push(PathBuf::from(index.to_string()));
-                println!("Layer path after concatenation: {}", layer_path.display());
+                let layer_path = match blobs_dir.clone() {
+                    Some(_) => {
+                        let mut save_layer_path = blobs_dir.clone().unwrap();
+                        save_layer_path.push(PathBuf::from(index.to_string()));
+                        Some(save_layer_path)
+                    }
+                    None => {None}
+                };                
 
-                let mut open_file =
-                    OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .append(true)
-                    .open(layer_path.clone())
-                    .unwrap_or_else(|err| {
-                        panic!("Failed to create file {}. Original error: {}", layer_path.display(), err);
-                    });
 
                 let permit = semaphore.acquire().await;
                 let content_hash = upload_layer(
@@ -381,8 +395,7 @@ impl ConexUploader {
                     layer_id.clone(),
                     paths.clone(),
                     progress_sender,
-                    open_file,
-                    layer_path.clone(),
+                    layer_path,
                 )
                 .await;
 
