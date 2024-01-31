@@ -71,7 +71,7 @@ async fn upload_layer(
     files: Vec<ConexFile>,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
     mut open_file: File,
-    local_blobs_dir: PathBuf,
+    local_layer_path: PathBuf,
 ) -> Descriptor {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
@@ -276,11 +276,10 @@ async fn upload_layer(
         assert!(upload_final_resp.status() == 201);
 
         // rename the layer file with proper hash
-        let mut old_file = local_blobs_dir.clone();
-        old_file.push(key.clone());
-        let mut new_file = local_blobs_dir.clone();
-        new_file.push(hash.clone());
-        fs::rename(old_file, new_file).unwrap();
+        let mut renamed_file = local_layer_path.clone();
+        renamed_file.pop();
+        renamed_file.push(hash.clone());
+        fs::rename(local_layer_path, renamed_file).unwrap();
 
         start_offset
     });
@@ -340,7 +339,8 @@ impl ConexUploader {
 
         let mut parallel_uploads = tokio::task::JoinSet::new();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs));
-        plan.into_iter().for_each(|(layer_id, paths)| {
+        // plan.into_iter().enumerate().for_each(|index, (layer_id, paths)| 
+        for (index, (layer_id, paths)) in plan.into_iter().enumerate() {
             let semaphore = semaphore.clone();
             let client = self.client.clone();
             let repo_info = self.repo_info.clone();
@@ -359,7 +359,10 @@ impl ConexUploader {
             parallel_uploads.spawn(async move {
                 // Create a file to write archive of current layer
                 let mut layer_path = blobs_dir.clone();
-                layer_path.push(layer_id.clone());
+                println!("Layer path: {}", layer_path.display());
+                println!("Task id: {}", index.clone());
+                layer_path.push(PathBuf::from(index.to_string()));
+                println!("Layer path after concatenation: {}", layer_path.display());
 
                 let mut open_file =
                     OpenOptions::new()
@@ -379,7 +382,7 @@ impl ConexUploader {
                     paths.clone(),
                     progress_sender,
                     open_file,
-                    blobs_dir.clone(),
+                    layer_path.clone(),
                 )
                 .await;
 
@@ -387,7 +390,7 @@ impl ConexUploader {
 
                 (layer_id, content_hash)
             });
-        });
+        };
 
         let mut result_map = HashMap::<String, Descriptor>::new();
         while let Some(result) = parallel_uploads.join_next().await {
