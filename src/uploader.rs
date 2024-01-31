@@ -190,6 +190,23 @@ async fn upload_layer(
         let chunk_size = std::cmp::max(min_chunk_size, UPLOAD_CHUNK_SIZE);
 
         let mut start_offset = 0;
+
+        let mut open_file = match local_layer_path.clone() {
+            Some(_) => {
+                let returned_file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(local_layer_path.clone().unwrap())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create file {}. Original error: {}", local_layer_path.clone().unwrap().display(), err);
+                });
+                Some(returned_file)
+            }
+            None => None
+        };
+
+
         loop {
             let mut send_buffer = vec![0; chunk_size];
 
@@ -202,25 +219,19 @@ async fn upload_layer(
                 }
             };
 
-            if let Some(_) = local_layer_path.clone() {
-                let save_layer_path = local_layer_path.clone().unwrap();
-
-                let mut open_file = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .append(true)
-                    .open(save_layer_path.clone())
-                    .unwrap_or_else(|err| {
-                        panic!("Failed to create file {}. Original error: {}", save_layer_path.display(), err);
-                    });
-
-                match open_file.write_all(&send_buffer) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
+            open_file = match local_layer_path.clone() {
+                Some(_) => {
+                    let mut file = open_file.unwrap();
+                    match file.write_all(&send_buffer) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
+                        }
                     }
+                    Some(file)
                 }
-            }
+                None => None
+            };
 
             let streamer = ProgressStreamer::new(
                 progress_sender.clone(),
@@ -361,7 +372,7 @@ impl ConexUploader {
             let progress_sender = self.progress_sender.clone();
 
             // Create the directory to locally save blobs
-            let blobs_dir = match self.local_image_path {
+            let blobs_dir = match self.local_image_path.clone() {
                 Some(_) => {
                     let mut save_image_path = self.local_image_path.clone().unwrap();
                     save_image_path.push("blobs/sha256");
@@ -373,7 +384,7 @@ impl ConexUploader {
                     }
                     Some(save_image_path)
                 }
-                None => {None}
+                None => None
             };         
 
             parallel_uploads.spawn(async move {
@@ -384,7 +395,7 @@ impl ConexUploader {
                         save_layer_path.push(PathBuf::from(index.to_string()));
                         Some(save_layer_path)
                     }
-                    None => {None}
+                    None => None
                 };                
 
 

@@ -28,7 +28,7 @@ test-push-workload:
     docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
     cargo run -- push localhost:$port/workload
 
-test-local-write:
+test-local-write-workload:
     #!/usr/bin/env bash
     set -ex
     docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
