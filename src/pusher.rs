@@ -61,7 +61,7 @@ impl ContainerPusher {
         let config_descriptor = self
             .push_config(repo_info.clone(), layer_descriptors.clone(), local_image_path.clone())
             .await;
-        self.push_manifest(repo_info.clone(), config_descriptor, layer_descriptors)
+        self.push_manifest(repo_info.clone(), config_descriptor, layer_descriptors, local_image_path.clone())
             .await;
     }
 
@@ -189,6 +189,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         config_descriptor: Descriptor,
         layer_descriptors: Vec<Descriptor>,
+        local_image_path: PathBuf,
     ) {
         let manifest = oci_spec::image::ImageManifestBuilder::default()
             .schema_version(oci_spec::image::SCHEMA_VERSION)
@@ -203,6 +204,25 @@ impl ContainerPusher {
         );
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
+
+        let mut manifest_path = local_image_path.clone();
+        manifest_path.push("blobs/sha256");
+        manifest_path.push(sha256_hash.clone());
+
+        let mut open_file =
+            OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(manifest_path.clone())
+            .unwrap_or_else(|err| {
+                panic!("Failed to create manifest file {}. Original error: {}", manifest_path.display(), err);
+            });
+        match open_file.write_all(serialized_manifest.as_bytes()) {
+            Ok(_) => {}
+            Err(err) => {
+                panic!("Failed to write manifest to file: {}. Original error: {}", manifest_path.display(), err);
+            }
+        };
 
         for tag in &[
             repo_info.reference.tag().unwrap_or("latest"),
