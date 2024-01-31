@@ -1,13 +1,13 @@
+set dotenv-load
+
 list:
     @just --list
 
-export port := "5555"
-
 run-registry:
     #!/usr/bin/env bash
-    docker run -p $port:$port --network=host \
+    docker run -p $DOCKER_PORT:$DOCKER_PORT --network=host \
         -v /tmp/registry-cache:/var/lib/registry \
-        -e REGISTRY_HTTP_ADDR=localhost:$port \
+        -e REGISTRY_HTTP_ADDR=localhost:$DOCKER_PORT \
         -e REGISTRY_STORAGE=filesystem \
         -e REGISTRY_HEALTH_STORAGEDRIVER_ENABLED=false \
         -e REGISTRY_LOG_LEVEL=debug \
@@ -19,37 +19,37 @@ set-permission:
 test-push:
     #!/usr/bin/env bash
     docker pull alpine
-    docker tag alpine localhost:$port/alpine
-    cargo run -- push localhost:$port/alpine
+    docker tag alpine localhost:$DOCKER_PORT/alpine
+    cargo run -- push localhost:$DOCKER_PORT/alpine
 
 test-push-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
-    cargo run -- push localhost:$port/workload
+    docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
+    cargo run -- push localhost:$DOCKER_PORT/workload
 
 test-local-write-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:$port/workload -f workloads/Dockerfile workloads
-    cargo run -- --local-image-path "/home/ethanxu/conex" push localhost:$port/workload
+    docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
+    cargo run -- --local-image-path "/home/ethanxu/conex" push localhost:$DOCKER_PORT/workload
 
 get-manifest:
     #!/usr/bin/env bash
-    curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$port/v2/workload/manifests/latest | jq .
+    curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$DOCKER_PORT/v2/workload/manifests/latest | jq .
 
 get-config:
     #!/usr/bin/env bash
     set -ex
-    config_digest=$(curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$port/v2/workload/manifests/latest | jq -r .config.digest)
-    curl localhost:$port/v2/workload/blobs/$config_digest | jq .
+    config_digest=$(curl -H "Accept: application/vnd.oci.image.manifest.v1+json" localhost:$DOCKER_PORT/v2/workload/manifests/latest | jq -r .config.digest)
+    curl localhost:$DOCKER_PORT/v2/workload/blobs/$config_digest | jq .
 
 test-docker-pull:
-    docker pull localhost:$port/workload
-    docker run --rm localhost:$port/workload ls -l
+    docker pull localhost:$DOCKER_PORT/workload
+    docker run --rm localhost:$DOCKER_PORT/workload ls -l
 
 test-real-push-workload:
-    docker tag localhost:$port/workload simonmok/workload
+    docker tag localhost:$DOCKER_PORT/workload simonmok/workload
     cargo run -- push simonmok/workload
 
 test-real-push-alpine:
@@ -58,7 +58,7 @@ test-real-push-alpine:
     cargo run -- push simonmok/alpine
 
 test-pull-local:
-    cargo run -- --jobs 1 pull localhost:$port/workload
+    cargo run -- --jobs 1 pull localhost:$DOCKER_PORT/workload
 
 test-pull-hub:
     cargo build
