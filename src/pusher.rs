@@ -4,7 +4,9 @@ use itertools::Itertools;
 use oci_spec::image::Descriptor;
 use reqwest::{Client, RequestBuilder};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
-use tracing::info;
+use tracing::{debug, info};
+use std::fs::OpenOptions;
+use std::io::Write;
 
 use crate::{
     data_store::DataStore,
@@ -49,17 +51,17 @@ impl ContainerPusher {
             client: Client::new(),
         }
     }
-    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool) {
+    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, local_image_path: Option<PathBuf>) {
         let repo_info = RepoInfo::from_string(source_image.clone()).await;
 
         let mut layer_descriptors = self
-            .push_blobs(repo_info.clone(), jobs, show_progress)
+            .push_blobs(repo_info.clone(), jobs, show_progress, local_image_path.clone())
             .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
         let config_descriptor = self
-            .push_config(repo_info.clone(), layer_descriptors.clone())
+            .push_config(repo_info.clone(), layer_descriptors.clone(), local_image_path.clone())
             .await;
-        self.push_manifest(repo_info.clone(), config_descriptor, layer_descriptors)
+        self.push_manifest(repo_info.clone(), config_descriptor, layer_descriptors, local_image_path.clone())
             .await;
     }
 
@@ -67,6 +69,7 @@ impl ContainerPusher {
         &self,
         repo_info: RepoInfo,
         layer_descriptors: Vec<Descriptor>,
+        local_image_path: Option<PathBuf>,
     ) -> Descriptor {
         // Upload the config
         let image_info = self
@@ -128,6 +131,27 @@ impl ContainerPusher {
             ring::digest::digest(&ring::digest::SHA256, serialized_config.as_bytes()).as_ref(),
         );
         let content_length = serialized_config.len();
+
+        if local_image_path.is_some() {
+            let mut config_path = local_image_path.clone().unwrap();
+            config_path.push("blobs/sha256/config.json");
+
+            let mut open_file =
+                OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(config_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create config file {}. Original error: {}", config_path.display(), err);
+                });
+            match open_file.write_all(serialized_config.as_bytes()) {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Failed to write config to file: {}. Original error: {}", config_path.display(), err);
+                }
+            };
+        }
+
         let resp = self
             .client
             .execute({
@@ -166,6 +190,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         config_descriptor: Descriptor,
         layer_descriptors: Vec<Descriptor>,
+        local_image_path: Option<PathBuf>,
     ) {
         let manifest = oci_spec::image::ImageManifestBuilder::default()
             .schema_version(oci_spec::image::SCHEMA_VERSION)
@@ -180,6 +205,27 @@ impl ContainerPusher {
         );
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
+
+        if local_image_path.is_some() {
+            let mut manifest_path = local_image_path.clone().unwrap();
+            manifest_path.push("blobs/sha256/manifest.json");
+    
+            let mut open_file =
+                OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(manifest_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create manifest file {}. Original error: {}", manifest_path.display(), err);
+                });
+            match open_file.write_all(serialized_manifest.as_bytes()) {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Failed to write manifest to file: {}. Original error: {}", manifest_path.display(), err);
+                }
+            };
+        }
+
 
         for tag in &[
             repo_info.reference.tag().unwrap_or("latest"),
@@ -209,6 +255,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         jobs: usize,
         show_progress: bool,
+        local_image_path: Option<PathBuf>,
     ) -> Vec<Descriptor> {
         let image_info = self
             .docker
@@ -229,6 +276,10 @@ impl ContainerPusher {
                     Some(lower_dir) => lower_dir.split(':').map(|s| s.to_owned()).collect(),
                     None => Vec::new(),
                 };
+
+                debug!("upper layer: {}", upper_layer);
+                debug!("lower layers: {:?}", lower_layers);
+
                 vec![upper_layer].into_iter().chain(lower_layers).collect()
             } else if graph_driver.name == "conex" {
                 let store = DataStore::new(METADATA_DB_PATH.into());
@@ -262,7 +313,8 @@ impl ContainerPusher {
                                 None
                             }
                         };
-
+                        
+                        // Note(ex) unclear to me what this is doing with each layer diff_id: isn't diff_id already the sha?
                         info!("Option 1: {:?}, Option 2: {:?}", sha_option_1, sha_option_2);
 
                         sha_option_1.or(sha_option_2).unwrap()
@@ -313,7 +365,7 @@ impl ContainerPusher {
             })
             .collect::<Vec<(String, usize)>>();
         info!("Layer sizes: {:?}", layers_to_size);
-        let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx);
+        let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx, local_image_path.clone());
         let upload_task = tokio::spawn(async move { uploader.upload(plan, jobs).await });
 
         if show_progress {

@@ -14,7 +14,7 @@ run-registry:
         registry:2
 
 set-permission:
-    sudo setfacl -R -m u:ubuntu:rwx /var/lib/docker/overlay2
+    sudo setfacl -R -m u:ethanxu:rwx /var/lib/docker/overlay2
 
 test-push:
     #!/usr/bin/env bash
@@ -27,6 +27,12 @@ test-push-workload:
     set -ex
     docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
     cargo run -- push localhost:$DOCKER_PORT/workload
+
+test-local-write-workload:
+    #!/usr/bin/env bash
+    set -ex
+    docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
+    cargo run -- --local-image-path "/home/ethanxu/conex" push localhost:$DOCKER_PORT/workload
 
 get-manifest:
     #!/usr/bin/env bash
