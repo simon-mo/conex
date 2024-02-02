@@ -299,7 +299,7 @@ async fn upload_layer(
         assert!(upload_final_resp.status() == 201);
 
         // rename the layer file with proper hash
-        if let Some(_) = local_layer_path.clone() {
+        if local_layer_path.is_some() {
             let mut renamed_file = local_layer_path.clone().unwrap();
             renamed_file.pop();
             renamed_file.push(hash.clone());

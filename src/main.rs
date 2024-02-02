@@ -15,7 +15,6 @@ use puller::ContainerPuller;
 use pusher::ContainerPusher;
 use snapshotter::serve_snapshotter;
 use tracing::info;
-use std::env;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]

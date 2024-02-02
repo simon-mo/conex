@@ -3,9 +3,9 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
 use oci_spec::image::Descriptor;
 use reqwest::{Client, RequestBuilder};
-use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
-use tracing::info;
-use std::fs::{File, OpenOptions};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use tracing::{debug, info};
+use std::fs::OpenOptions;
 use std::io::Write;
 
 use crate::{
@@ -132,10 +132,9 @@ impl ContainerPusher {
         );
         let content_length = serialized_config.len();
 
-        if let Some(_) = local_image_path {
+        if local_image_path.is_some() {
             let mut config_path = local_image_path.clone().unwrap();
-            config_path.push("blobs/sha256");
-            config_path.push(sha256_hash.clone());
+            config_path.push("blobs/sha256/config.json");
 
             let mut open_file =
                 OpenOptions::new()
@@ -207,10 +206,9 @@ impl ContainerPusher {
         let content_length = serialized_manifest.len();
         info!("Uploading manifest: {:?}", manifest);
 
-        if let Some(_) = local_image_path {
+        if local_image_path.is_some() {
             let mut manifest_path = local_image_path.clone().unwrap();
-            manifest_path.push("blobs/sha256");
-            manifest_path.push(sha256_hash.clone());
+            manifest_path.push("blobs/sha256/manifest.json");
     
             let mut open_file =
                 OpenOptions::new()
@@ -279,8 +277,8 @@ impl ContainerPusher {
                     None => Vec::new(),
                 };
 
-                println!("upper layer: {}", upper_layer);
-                println!("lower layers: {:?}", lower_layers);
+                debug!("upper layer: {}", upper_layer);
+                debug!("lower layers: {:?}", lower_layers);
 
                 vec![upper_layer].into_iter().chain(lower_layers).collect()
             } else if graph_driver.name == "conex" {
