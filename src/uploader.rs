@@ -236,14 +236,14 @@ async fn upload_layer(
                 None => None
             };
 
-            if !saving_to_disk_only {
-                let streamer = ProgressStreamer::new(
-                    progress_sender.clone(),
-                    key.clone(),
-                    crate::progress::UpdateType::SocketSend,
-                    Bytes::copy_from_slice(&send_buffer[0..buf_len]),
-                );
-    
+            let streamer = ProgressStreamer::new(
+                progress_sender.clone(),
+                key.clone(),
+                crate::progress::UpdateType::SocketSend,
+                Bytes::copy_from_slice(&send_buffer[0..buf_len]),
+            );
+
+            if !saving_to_disk_only {    
                 // Note that because content range is inclusive, we need to subtract 1 from the end offset.
                 let upload_chunk_resp = client
                     .execute({
