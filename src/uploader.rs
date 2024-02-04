@@ -191,8 +191,10 @@ async fn upload_layer(
 
         let mut start_offset = 0;
 
-        let mut open_file = match local_layer_path.clone() {
-            Some(_) => {
+        let saving_to_disk_only = local_layer_path.is_some();
+
+        let mut open_file = match saving_to_disk_only {
+            true => {
                 let returned_file = OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -203,7 +205,7 @@ async fn upload_layer(
                 });
                 Some(returned_file)
             }
-            None => None
+            false => None
         };
 
 
@@ -228,32 +230,78 @@ async fn upload_layer(
                             panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
                         }
                     }
+                    start_offset += buf_len;
                     Some(file)
                 }
                 None => None
             };
 
-            let streamer = ProgressStreamer::new(
-                progress_sender.clone(),
-                key.clone(),
-                crate::progress::UpdateType::SocketSend,
-                Bytes::copy_from_slice(&send_buffer[0..buf_len]),
-            );
+            if !saving_to_disk_only {
+                let streamer = ProgressStreamer::new(
+                    progress_sender.clone(),
+                    key.clone(),
+                    crate::progress::UpdateType::SocketSend,
+                    Bytes::copy_from_slice(&send_buffer[0..buf_len]),
+                );
+    
+                // Note that because content range is inclusive, we need to subtract 1 from the end offset.
+                let upload_chunk_resp = client
+                    .execute({
+                        let req = client
+                            .patch(location)
+                            .header("Content-Type", "application/octet-stream")
+                            .header("Content-Length", buf_len)
+                            .header(
+                                "Content-Range",
+                                format!("{}-{}", start_offset, start_offset + buf_len - 1),
+                            )
+                            // .body(send_buffer[0..buf_len].to_vec())
+                            .body(reqwest::Body::wrap_stream(streamer));
+    
+                        if let Some(token) = repo_info.auth_token.as_ref() {
+                            req.header("Authorization", token).build().unwrap()
+                        } else {
+                            req.build().unwrap()
+                        }
+                    })
+                    .await
+                    .unwrap();
+                assert!(
+                    upload_chunk_resp.status() == 202,
+                    "{}",
+                    upload_chunk_resp.text().await.unwrap()
+                );
+                start_offset += buf_len;
+    
+                location = upload_chunk_resp
+                    .headers()
+                    .get("Location")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+    
+                if consumer.is_closed() && consumer.is_empty() {
+                    break;
+                }
+            }
+        }
 
-            // Note that because content range is inclusive, we need to subtract 1 from the end offset.
-            let upload_chunk_resp = client
+        // Finish the upload with the final PUT request
+        let hash = hash_socket_rx.await.unwrap();
+
+        println!("&&&& hash: {}", hash);
+
+        if saving_to_disk_only {
+            let mut renamed_file = local_layer_path.clone().unwrap();
+            renamed_file.pop();
+            renamed_file.push(hash.clone());
+            fs::rename(local_layer_path.unwrap(), renamed_file).unwrap();
+        } else {
+            let url = format!("{}&digest=sha256:{}", location, hash); //TODO: proper url parse
+            let upload_final_resp = client
                 .execute({
-                    let req = client
-                        .patch(location)
-                        .header("Content-Type", "application/octet-stream")
-                        .header("Content-Length", buf_len)
-                        .header(
-                            "Content-Range",
-                            format!("{}-{}", start_offset, start_offset + buf_len - 1),
-                        )
-                        // .body(send_buffer[0..buf_len].to_vec())
-                        .body(reqwest::Body::wrap_stream(streamer));
-
+                    let req = client.put(&url);
                     if let Some(token) = repo_info.auth_token.as_ref() {
                         req.header("Authorization", token).build().unwrap()
                     } else {
@@ -262,50 +310,9 @@ async fn upload_layer(
                 })
                 .await
                 .unwrap();
-            assert!(
-                upload_chunk_resp.status() == 202,
-                "{}",
-                upload_chunk_resp.text().await.unwrap()
-            );
-            start_offset += buf_len;
-
-            location = upload_chunk_resp
-                .headers()
-                .get("Location")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
-
-            if consumer.is_closed() && consumer.is_empty() {
-                break;
-            }
+            assert!(upload_final_resp.status() == 201);
         }
-
-        // Finish the upload with the final PUT request
-        let hash = hash_socket_rx.await.unwrap();
-        let url = format!("{}&digest=sha256:{}", location, hash); //TODO: proper url parse
-        let upload_final_resp = client
-            .execute({
-                let req = client.put(&url);
-                if let Some(token) = repo_info.auth_token.as_ref() {
-                    req.header("Authorization", token).build().unwrap()
-                } else {
-                    req.build().unwrap()
-                }
-            })
-            .await
-            .unwrap();
-        assert!(upload_final_resp.status() == 201);
-
-        // rename the layer file with proper hash
-        if local_layer_path.is_some() {
-            let mut renamed_file = local_layer_path.clone().unwrap();
-            renamed_file.pop();
-            renamed_file.push(hash.clone());
-            fs::rename(local_layer_path.unwrap(), renamed_file).unwrap();
-        }
-
+        println!("&&&&& start offset: {}", start_offset);
         start_offset
     });
 
@@ -322,6 +329,8 @@ async fn upload_layer(
     let size = bytes_count.iter().next().unwrap();
 
     let hash = hash_descriptor_rx.await.unwrap();
+
+    println!("&&&& hash from hash descriptor: {}", hash);
 
     let mut annotations = HashMap::<String, String>::new();
     annotations.insert(
@@ -388,7 +397,7 @@ impl ConexUploader {
             };         
 
             parallel_uploads.spawn(async move {
-                // Create a file to write archive of current layer
+                // Create a file to locally write archive of current layer
                 let layer_path = match blobs_dir.clone() {
                     Some(_) => {
                         let mut save_layer_path = blobs_dir.clone().unwrap();

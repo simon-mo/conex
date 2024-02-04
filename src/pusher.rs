@@ -133,6 +133,7 @@ impl ContainerPusher {
         let content_length = serialized_config.len();
 
         if local_image_path.is_some() {
+            info!("Writing config to local disk");
             let mut config_path = local_image_path.clone().unwrap();
             config_path.push("blobs/sha256/config.json");
 
@@ -150,32 +151,31 @@ impl ContainerPusher {
                     panic!("Failed to write config to file: {}. Original error: {}", config_path.display(), err);
                 }
             };
+        } else {
+            let resp = self
+                .client
+                .execute({
+                    let req = self
+                        .client
+                        .put(upload_url.to_str().unwrap())
+                        .body(serialized_config)
+                        .query(&[("digest", format!("sha256:{}", sha256_hash))]);
+
+                    if let Some(token) = repo_info.auth_token.as_ref() {
+                        req.header("Authorization", token).build().unwrap()
+                    } else {
+                        req.build().unwrap()
+                    }
+                })
+                .await
+                .unwrap();
+            assert!(
+                resp.status() == 201,
+                "Failed to upload config: {}",
+                resp.text().await.unwrap()
+            );
+            info!("Uploaded config: {:?}", image_config);
         }
-
-        let resp = self
-            .client
-            .execute({
-                let req = self
-                    .client
-                    .put(upload_url.to_str().unwrap())
-                    .body(serialized_config)
-                    .query(&[("digest", format!("sha256:{}", sha256_hash))]);
-
-                if let Some(token) = repo_info.auth_token.as_ref() {
-                    req.header("Authorization", token).build().unwrap()
-                } else {
-                    req.build().unwrap()
-                }
-            })
-            .await
-            .unwrap();
-        assert!(
-            resp.status() == 201,
-            "Failed to upload config: {}",
-            resp.text().await.unwrap()
-        );
-
-        info!("Uploaded config: {:?}", image_config);
 
         oci_spec::image::DescriptorBuilder::default()
             .media_type("application/vnd.oci.image.config.v1+json")
@@ -204,9 +204,9 @@ impl ContainerPusher {
             ring::digest::digest(&ring::digest::SHA256, serialized_manifest.as_bytes()).as_ref(),
         );
         let content_length = serialized_manifest.len();
-        info!("Uploading manifest: {:?}", manifest);
 
         if local_image_path.is_some() {
+            info!("Writing manifest to local disk");
             let mut manifest_path = local_image_path.clone().unwrap();
             manifest_path.push("blobs/sha256/manifest.json");
     
@@ -224,29 +224,29 @@ impl ContainerPusher {
                     panic!("Failed to write manifest to file: {}. Original error: {}", manifest_path.display(), err);
                 }
             };
-        }
-
-
-        for tag in &[
-            repo_info.reference.tag().unwrap_or("latest"),
-            &sha256_hash.clone()[..6],
-        ] {
-            let resp = self
-                .client
-                .execute(
-                    RequestBuilder::from_parts(
-                        self.client.clone(),
-                        repo_info.upload_manifest_request(tag),
+        } else {
+            info!("Uploading manifest: {:?}", manifest);
+            for tag in &[
+                repo_info.reference.tag().unwrap_or("latest"),
+                &sha256_hash.clone()[..6],
+            ] {
+                let resp = self
+                    .client
+                    .execute(
+                        RequestBuilder::from_parts(
+                            self.client.clone(),
+                            repo_info.upload_manifest_request(tag),
+                        )
+                        .body(serialized_manifest.clone())
+                        .header("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+                        .header("Content-Length", content_length)
+                        .build()
+                        .unwrap(),
                     )
-                    .body(serialized_manifest.clone())
-                    .header("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-                    .header("Content-Length", content_length)
-                    .build()
-                    .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert!(resp.status() == 201);
+                    .await
+                    .unwrap();
+                assert!(resp.status() == 201);
+            }
         }
     }
 
@@ -314,7 +314,6 @@ impl ContainerPusher {
                             }
                         };
                         
-                        // Note(ex) unclear to me what this is doing with each layer diff_id: isn't diff_id already the sha?
                         info!("Option 1: {:?}, Option 2: {:?}", sha_option_1, sha_option_2);
 
                         sha_option_1.or(sha_option_2).unwrap()
