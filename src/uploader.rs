@@ -125,64 +125,11 @@ async fn upload_layer(
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
                     header.set_metadata(&meta.clone());
-                    header.set_size(0);
+                    header.set_size(file.size.clone() as u64);
                     header.set_entry_type(EntryType::Link);
-                    if file.start_offset.is_none() {
-                        tar_builder
-                        .append_link(&mut header, file.relative_path.clone(), hard_link_to)
-                        .unwrap();
-                    } else {
-                        let path = file.path.to_str().unwrap().to_string();
-                        //Write fragment metadata into tar
-                        let split_metadata = SplitMetadata {
-                            path: path.clone(),
-                            start_offset: file.start_offset.unwrap() as u32,
-                            chunk_size: file.chunk_size.unwrap() as u32,
-                            total_size: file.size as u64,
-                        };
-                        let metadata_json = serde_json::to_string(&split_metadata).unwrap();
-                        let metadata_json_bytes = metadata_json.as_bytes();
-    
-                        let mut metadata_header = Header::new_gnu();
-                        metadata_header.set_size(metadata_json_bytes.len() as u64);
-                        metadata_header.set_cksum();
-                        let rel_path = file.relative_path.to_str().unwrap().to_string();
-                        tar_builder
-                            .append_data(
-                                &mut metadata_header,
-                                format!("{}.split-metadata.{}.json", rel_path, file.segment_idx.unwrap().clone()),
-                                metadata_json_bytes,
-                            )
-                            .unwrap();
-
-                        //File header
-                        let mut header = Header::new_gnu();
-                        header.set_metadata(&meta.clone());
-                        header.set_size(0);
-                        header.set_entry_type(EntryType::Link);
-
-                        //Write fragment into tar
-                        let mut chunk_header = Header::new_gnu();
-                        chunk_header.set_size(file.chunk_size.unwrap() as u64);
-                        chunk_header.set_entry_type(tar::EntryType::Regular);
-                        chunk_header.set_path(&rel_path).unwrap();
-                        chunk_header.set_uid(meta.clone().uid().into());
-                        chunk_header.set_gid(meta.clone().gid().into());
-                        chunk_header.set_cksum();
-                        //let mut chunk_data = entry.take(chunk_size as u64);
-                        //Is it okay to do this + memory inefficient?
-                        let mut hard_file = File::open(path.clone()).unwrap();
-                        let mut buffer = Vec::new();
-                        let _ = hard_file.read_to_end(&mut buffer);
-                        let start = file.start_offset.unwrap();
-                        let end = start + file.chunk_size.unwrap();
-                        assert!(start <= end);
-                        assert!(end <= file.size);
-                        let mut chunk_data = &buffer[start..end];
-                        tar_builder
-                            .append(&chunk_header, &mut chunk_data)
-                            .unwrap();
-                    }
+                    tar_builder
+                    .append_link(&mut header, file.relative_path.clone(), hard_link_to)
+                    .unwrap();        
                 }
                 None => {
                     let mut relative_path = file.relative_path.clone().to_str().unwrap().to_string();
@@ -202,7 +149,51 @@ async fn upload_layer(
                         // );
                         continue;
                     }
-                    tar_builder
+                    if meta.is_file() && file.start_offset.is_some() {
+                        let path = file.path.to_str().unwrap().to_string();
+                        //Write fragment metadata into tar
+                        let split_metadata = SplitMetadata {
+                            path: path.clone(),
+                            start_offset: file.start_offset.unwrap() as u32,
+                            chunk_size: file.chunk_size.unwrap() as u32,
+                            total_size: file.size as u64,
+                        };
+                        let metadata_json = serde_json::to_string(&split_metadata).unwrap();
+                        let metadata_json_bytes = metadata_json.as_bytes();
+                        let mut metadata_header = Header::new_gnu();
+                        metadata_header.set_size(metadata_json_bytes.len() as u64);
+                        metadata_header.set_cksum();
+                        let rel_path = file.relative_path.to_str().unwrap().to_string();
+                        tar_builder
+                            .append_data(
+                                &mut metadata_header,
+                                format!("{}.split-metadata.{}.json", rel_path, file.segment_idx.unwrap().clone()),
+                                metadata_json_bytes,
+                            )
+                            .unwrap();
+                            //Write fragment into tar
+                        let mut chunk_header = Header::new_gnu();
+                        chunk_header.set_size(file.chunk_size.unwrap() as u64);
+                        chunk_header.set_entry_type(tar::EntryType::Regular);
+                        chunk_header.set_path(&rel_path).unwrap();
+                        chunk_header.set_uid(meta.clone().uid().into());                            
+                        chunk_header.set_gid(meta.clone().gid().into());
+                        chunk_header.set_cksum();
+                        //let mut chunk_data = entry.take(chunk_size as u64);
+                        //Is it okay to do this + memory inefficient?
+                        let mut hard_file = File::open(path.clone()).unwrap();
+                        let mut buffer = Vec::new();
+                        let _ = hard_file.read_to_end(&mut buffer);
+                        let start = file.start_offset.unwrap();
+                        let end = start + file.chunk_size.unwrap();
+                        assert!(start <= end);
+                        assert!(end <= file.size);
+                        let mut chunk_data = &buffer[start..end];
+                        tar_builder
+                            .append(&chunk_header, &mut chunk_data)
+                            .unwrap();
+                    } else {
+                        tar_builder
                         .append_path_with_name(&file.path, &relative_path)
                         .unwrap_or_else(|e| {
                             panic!(
@@ -210,6 +201,8 @@ async fn upload_layer(
                                 file.path, relative_path, e
                             )
                         });
+                    
+                    }
                 }
             } 
         }
@@ -393,6 +386,7 @@ impl ConexUploader {
             let client = self.client.clone();
             let repo_info = self.repo_info.clone();
             let progress_sender = self.progress_sender.clone();
+            
             parallel_uploads.spawn(async move {
                 let permit = semaphore.acquire().await;
                 let content_hash = upload_layer(

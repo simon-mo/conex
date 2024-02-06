@@ -115,24 +115,27 @@ impl ConexPlanner {
         let mut total_size = 0;
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
+                let meta = file.path.symlink_metadata().unwrap().clone();
+                println!("hard_link_to {} and file size {} real file {}", file.hard_link_to.is_some(), file.size.clone(), meta.is_file());
+                //automatically pushes links and (directories?)
+                if !meta.is_file() || file.hard_link_to.is_some(){
+                    new_layer.push(file.to_owned());
+                    continue;
+                }
                 total_size += file.size;
                 let mut segment_idx = 0;
                 let mut remainder_size = file.size;
                 while remainder_size != 0 {
-                    //println!("remainder size {}",remainder_size.to_string());
                     let mut frag = file.clone();
-                    if frag.hard_link_to.is_none() || remainder_size + current_layer_size < self.split_threshold {
+                    if remainder_size + current_layer_size < self.split_threshold{
                         if remainder_size != file.size {
-                            //Case where remainder is a leftover fragment
+                            //Case where remainder is a leftover fragment or file fits
                             frag.chunk_size = Some(remainder_size);
                             frag.start_offset = Some(file.size - remainder_size);
                             frag.segment_idx = Some(segment_idx);
                         }
-                        new_layer.push(frag.to_owned());
-                        if frag.hard_link_to.is_some() {
-                            //soft links don't count
-                            current_layer_size += remainder_size;
-                        }
+                        current_layer_size += remainder_size;
+                        new_layer.push(frag);
                         break;
                     } else {
                         //Split file + layer
@@ -140,10 +143,7 @@ impl ConexPlanner {
                         frag.chunk_size = Some(self.split_threshold - current_layer_size);
                         frag.segment_idx = Some(segment_idx);
                         new_layer.push(frag.to_owned());
-                        //let sl = segment_idx.to_string();
-                        //let name = layer.clone()+&sl + &samp.to_string();
                         let name = num_layer.to_string();
-                        //println!("layer size {}",current_layer_size.to_string());
                         new_layer_to_files.push((name, new_layer.clone()));
                         num_layer +=1;
                         new_layer = Vec::new();
@@ -156,11 +156,7 @@ impl ConexPlanner {
         }
         if !new_layer.is_empty() {
             new_layer_to_files.push((String::from("last"), (new_layer).clone()));
-            //println!("last/first layer with size{}", new_layer.pop().unwrap().size.to_string());
-            //layer_counter +=1;
         }
-        //println!("total size {}",total_size.to_string());
-        //println!("plan len {}",new_layer_to_files.len());
         new_layer_to_files.clone()
     }
 }
