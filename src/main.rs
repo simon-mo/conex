@@ -42,7 +42,7 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Push { name: String },
+    Push { name: String , threshold: usize},
 
     Pull { name: String },
 
@@ -84,10 +84,10 @@ async fn main() {
     let show_progress = !args.no_progress;
 
     match args.command {
-        Commands::Push { name } => {
+        Commands::Push { name, threshold} => {
             println!("Pushing container: {:?}", name);
             let pusher = ContainerPusher::new(docker);
-            pusher.push(name, jobs, show_progress).await;
+            pusher.push(name, jobs, show_progress, threshold).await;
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);

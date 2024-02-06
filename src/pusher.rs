@@ -49,11 +49,11 @@ impl ContainerPusher {
             client: Client::new(),
         }
     }
-    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool) {
+    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, threshold: usize) {
         let repo_info = RepoInfo::from_string(source_image.clone()).await;
 
         let mut layer_descriptors = self
-            .push_blobs(repo_info.clone(), jobs, show_progress)
+            .push_blobs(repo_info.clone(), jobs, show_progress, threshold)
             .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
         let config_descriptor = self
@@ -209,6 +209,7 @@ impl ContainerPusher {
         repo_info: RepoInfo,
         jobs: usize,
         show_progress: bool,
+        threshold: usize
     ) -> Vec<Descriptor> {
         let image_info = self
             .docker
@@ -290,7 +291,7 @@ impl ContainerPusher {
         // TODO: upload the oci config as well. ensure we can actually pull it.
         // TODO: add some progress bar niceties: remove the completed pbar, make the as logs
         let timer_planner_start = Instant::now();
-        let mut planner = ConexPlanner::default();
+        let mut planner = ConexPlanner::default(threshold);
         for layer in layers {
             planner.ingest_dir(&layer);
         }

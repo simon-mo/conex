@@ -23,7 +23,7 @@ test-push-workload:
     #!/usr/bin/env bash
     set -ex
     docker build -t localhost:5000/workload -f workloads/Dockerfile workloads
-    cargo run -- push localhost:5000/workload
+    cargo run -- push localhost:5000/workload 31457280
 
 get-manifest:
     #!/usr/bin/env bash
