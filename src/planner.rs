@@ -81,7 +81,6 @@ impl ConexPlanner {
                 });
             }
         }
-        //println!("ingested total size {}",total_size.to_string());
 
         self.layer_to_files
             .push((dir_path.to_owned(), file_metadata_vec));
@@ -116,7 +115,6 @@ impl ConexPlanner {
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
                 let meta = file.path.symlink_metadata().unwrap().clone();
-                println!("hard_link_to {} and file size {} real file {}", file.hard_link_to.is_some(), file.size.clone(), meta.is_file());
                 //automatically pushes links and (directories?)
                 if !meta.is_file() || file.hard_link_to.is_some(){
                     new_layer.push(file.to_owned());
@@ -215,7 +213,6 @@ mod tests {
         assert_eq!(c_files.pop().unwrap().size, 100);
         let (holder, t_files) = plan.pop().unwrap();
         let mut c_files = t_files.clone();
-        println!("layer name {}", holder);
         assert_eq!(c_files.pop().unwrap().size, 100);
     }
     #[test]
