@@ -10,16 +10,17 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
-use std::vec;
+use std::{vec, fs};
 use tar::{Builder as TarBuilder, EntryType, Header};
-use std::fs::File;
 use std::io::prelude::*;
-use std::fs;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use std::fs::Metadata;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
+
+use std::fs::{File, OpenOptions};
+
 pub struct BlockingWriter<T>
 where
     T: Write,
@@ -64,6 +65,7 @@ pub struct ConexUploader {
     client: Client,
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+    local_image_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -81,6 +83,7 @@ async fn upload_layer(
     key: String,
     files: Vec<ConexFile>,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+    local_layer_path: Option<PathBuf>,
 ) -> Descriptor {
     let (mut producer, mut consumer) =
         async_ringbuf::AsyncHeapRb::<u8>::new(2 * UPLOAD_CHUNK_SIZE).split();
@@ -102,6 +105,7 @@ async fn upload_layer(
                 bytes_written_tx.send(bytes_written).unwrap();
             })),
         );
+        
         let encoder = ZstdEncoder::new(compressed_hasher, 0)
             .unwrap()
             .auto_finish();
@@ -244,6 +248,23 @@ async fn upload_layer(
         let chunk_size = std::cmp::max(min_chunk_size, UPLOAD_CHUNK_SIZE);
 
         let mut start_offset = 0;
+
+        let mut open_file = match local_layer_path.clone() {
+            Some(_) => {
+                let returned_file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(local_layer_path.clone().unwrap())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to create file {}. Original error: {}", local_layer_path.clone().unwrap().display(), err);
+                });
+                Some(returned_file)
+            }
+            None => None
+        };
+
+
         loop {
             let mut send_buffer = vec![0; chunk_size];
 
@@ -254,6 +275,20 @@ async fn upload_layer(
                     Ok(()) => chunk_size,
                     Err(count) => count,
                 }
+            };
+
+            open_file = match local_layer_path.clone() {
+                Some(_) => {
+                    let mut file = open_file.unwrap();
+                    match file.write_all(&send_buffer) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            panic!("Failed to write blobs to file: {}. Original error: {}", key, err);
+                        }
+                    }
+                    Some(file)
+                }
+                None => None
             };
 
             let streamer = ProgressStreamer::new(
@@ -322,6 +357,14 @@ async fn upload_layer(
             .unwrap();
         assert!(upload_final_resp.status() == 201);
 
+        // rename the layer file with proper hash
+        if local_layer_path.is_some() {
+            let mut renamed_file = local_layer_path.clone().unwrap();
+            renamed_file.pop();
+            renamed_file.push(hash.clone());
+            fs::rename(local_layer_path.unwrap(), renamed_file).unwrap();
+        }
+
         start_offset
     });
 
@@ -358,11 +401,13 @@ impl ConexUploader {
         client: Client,
         repo_info: RepoInfo,
         progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
+        local_image_path: Option<PathBuf>,
     ) -> Self {
         Self {
             client,
             repo_info,
             progress_sender,
+            local_image_path,
         }
     }
 
@@ -377,13 +422,41 @@ impl ConexUploader {
             .collect::<Vec<String>>();
         let mut parallel_uploads = tokio::task::JoinSet::new();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs));
-        plan.into_iter().for_each(|(layer_id, paths)| {
+        // plan.into_iter().enumerate().for_each(|index, (layer_id, paths)| 
+        for (index, (layer_id, paths)) in plan.into_iter().enumerate() {
             let semaphore = semaphore.clone();
             let client = self.client.clone();
             let repo_info = self.repo_info.clone();
             let progress_sender = self.progress_sender.clone();
-            
+
+            // Create the directory to locally save blobs
+            let blobs_dir = match self.local_image_path.clone() {
+                Some(_) => {
+                    let mut save_image_path = self.local_image_path.clone().unwrap();
+                    save_image_path.push("blobs/sha256");
+                    match fs::create_dir_all(save_image_path.clone()) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            panic!("Failed to create directory within {}. Original error: {}", save_image_path.display(), err);
+                        }
+                    }
+                    Some(save_image_path)
+                }
+                None => None
+            };         
+
             parallel_uploads.spawn(async move {
+                // Create a file to write archive of current layer
+                let layer_path = match blobs_dir.clone() {
+                    Some(_) => {
+                        let mut save_layer_path = blobs_dir.clone().unwrap();
+                        save_layer_path.push(PathBuf::from(index.to_string()));
+                        Some(save_layer_path)
+                    }
+                    None => None
+                };                
+
+
                 let permit = semaphore.acquire().await;
                 let content_hash = upload_layer(
                     client,
@@ -391,6 +464,7 @@ impl ConexUploader {
                     layer_id.clone(),
                     paths.clone(),
                     progress_sender,
+                    layer_path,
                 )
                 .await;
 
@@ -398,7 +472,7 @@ impl ConexUploader {
 
                 (layer_id, content_hash)
             });
-        });
+        };
 
         let mut result_map = HashMap::<String, Descriptor>::new();
         while let Some(result) = parallel_uploads.join_next().await {

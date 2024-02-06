@@ -115,7 +115,7 @@ impl ConexPlanner {
         let mut total_size = 0;
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
-                println!("{}", file.path.clone().to_string_lossy());
+                //println!("{}", file.path.clone().to_string_lossy());
                 let meta = file.path.symlink_metadata().unwrap().clone();
                 //automatically pushes links and (directories?)
                 if !meta.is_file() || file.hard_link_to.is_some(){
