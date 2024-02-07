@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::cmp;
 use std::io::Write;
-
+use std::fs::Metadata;
 
 pub struct ConexPlanner {
     pub layer_to_files: Vec<(String, Vec<ConexFile>)>,
@@ -21,6 +21,7 @@ pub struct ConexFile {
     pub inode: u64,
     pub hard_link_to: Option<PathBuf>,
     pub ctime_nsec: i64,
+    pub meta: Option<Metadata>,
     pub start_offset: Option<usize>,
     pub chunk_size: Option<usize>,
     pub segment_idx: Option<usize>
@@ -78,6 +79,7 @@ impl ConexPlanner {
                     inode: metadata.ino(),
                     hard_link_to: None,
                     ctime_nsec: metadata.ctime_nsec(),
+                    meta: Some(metadata.clone()),
                     ..Default::default()
                 });
             }
@@ -116,9 +118,8 @@ impl ConexPlanner {
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
                 //println!("{}", file.path.clone().to_string_lossy());
-                let meta = file.path.symlink_metadata().unwrap().clone();
                 //automatically pushes links and (directories?)
-                if !meta.is_file() || file.hard_link_to.is_some(){
+                if !file.meta.clone().unwrap().is_file() || file.hard_link_to.is_some(){
                     new_layer.push(file.to_owned());
                     continue;
                 }

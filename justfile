@@ -25,14 +25,14 @@ test-push:
 test-push-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:5000/workload -f workloads/Dockerfile workloads
-    cargo run -- push localhost:5000/workload 31457280
+    docker build -t localhost:5555/workload -f workloads/Dockerfile workloads
+    cargo run -- push localhost:5555/workload 31457280
 
 test-local-write-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:5000/workload -f workloads/Dockerfile workloads
-    cargo run -- --local-image-path "/home/ubuntu/conex" push localhost:5000/workload
+    docker build -t localhost:5555/workload -f workloads/Dockerfile workloads
+    cargo run -- --local-image-path "/home/ubuntu/conex" push localhost:5555/workload 31457280
 
 get-manifest:
     #!/usr/bin/env bash

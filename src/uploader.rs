@@ -16,6 +16,7 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use std::fs::Metadata;
+use tracing::{debug, info};
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 
@@ -124,7 +125,7 @@ async fn upload_layer(
         let mut tar_builder = TarBuilder::new(progress_writer);
         tar_builder.follow_symlinks(false);
         for file in files {
-            let meta = file.path.symlink_metadata().unwrap().clone();
+            let meta = file.meta.clone().unwrap();
             match file.hard_link_to {
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
@@ -146,11 +147,12 @@ async fn upload_layer(
                     }
 
                     if !meta.is_dir() && !meta.is_file() && !meta.is_symlink() {
-                        // info!(
-                        //     "Unsupported file type {:?} for file {:?}",
-                        //     meta.file_type(),
-                        //     file.path
-                        // );
+                        /*info!(
+                             "Unsupported file type {:?} for file {:?}",
+                             meta.file_type(),
+                             file.path
+                         );
+                         */
                         continue;
                     }
                     if meta.is_file() && file.start_offset.is_some() {
@@ -168,14 +170,15 @@ async fn upload_layer(
                         metadata_header.set_size(metadata_json_bytes.len() as u64);
                         metadata_header.set_cksum();
                         let rel_path = file.relative_path.to_str().unwrap().to_string();
+                        
                         tar_builder
                             .append_data(
                                 &mut metadata_header,
-                                format!("{}.split-metadata.{}.json", rel_path, file.segment_idx.unwrap().clone()),
+                                format!("{}.split-metadata.{}.json", rel_path.clone(), file.segment_idx.unwrap().clone()),
                                 metadata_json_bytes,
                             )
                             .unwrap();
-                            //Write fragment into tar
+                        //Write fragment into tar
                         let mut chunk_header = Header::new_gnu();
                         chunk_header.set_size(file.chunk_size.unwrap() as u64);
                         chunk_header.set_entry_type(tar::EntryType::Regular);
@@ -183,16 +186,14 @@ async fn upload_layer(
                         chunk_header.set_uid(meta.clone().uid().into());                            
                         chunk_header.set_gid(meta.clone().gid().into());
                         chunk_header.set_cksum();
-                        //let mut chunk_data = entry.take(chunk_size as u64);
-                        //Is it okay to do this + memory inefficient?
+
                         let mut hard_file = File::open(path.clone()).unwrap();
                         let mut buffer = Vec::new();
                         let _ = hard_file.read_to_end(&mut buffer);
                         let start = file.start_offset.unwrap();
                         let end = start + file.chunk_size.unwrap();
-                        assert!(start <= end);
-                        assert!(end <= file.size);
                         let mut chunk_data = &buffer[start..end];
+                        drop(hard_file);
                         tar_builder
                             .append(&chunk_header, &mut chunk_data)
                             .unwrap();
