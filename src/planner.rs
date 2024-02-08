@@ -22,6 +22,7 @@ pub struct ConexFile {
     pub hard_link_to: Option<PathBuf>,
     pub ctime_nsec: i64,
     pub meta: Option<Metadata>,
+    pub is_file: bool,
     pub start_offset: Option<usize>,
     pub chunk_size: Option<usize>,
     pub segment_idx: Option<usize>
@@ -79,6 +80,7 @@ impl ConexPlanner {
                     inode: metadata.ino(),
                     hard_link_to: None,
                     ctime_nsec: metadata.ctime_nsec(),
+                    is_file: metadata.is_file(),
                     meta: Some(metadata.clone()),
                     ..Default::default()
                 });
@@ -119,7 +121,7 @@ impl ConexPlanner {
             for file in files.iter() {
                 //println!("{}", file.path.clone().to_string_lossy());
                 //automatically pushes links and (directories?)
-                if !file.meta.clone().unwrap().is_file() || file.hard_link_to.is_some(){
+                if !file.is_file || file.hard_link_to.is_some(){
                     new_layer.push(file.to_owned());
                     continue;
                 }
@@ -162,20 +164,14 @@ impl ConexPlanner {
     }
 }
 // unit test module
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn test_split_layers() {
-        let mut planner = ConexPlanner::default();
-
-        planner.split_threshold = 100;
-
-
+        let mut planner = ConexPlanner::default(100);
         // insert fake ConexFile to planner
-        let files = Vec::new();
-        /*
+        let mut files = Vec::new();
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/123"),
             relative_path: PathBuf::from("123"),
@@ -183,6 +179,7 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            is_file: true,
             ..Default::default()
         });
         files.push(ConexFile {
@@ -192,6 +189,7 @@ mod tests {
             inode: 2,
             hard_link_to: None,
             ctime_nsec: 0,
+            is_file: true,
             ..Default::default()
         });
         files.push(ConexFile {
@@ -201,9 +199,9 @@ mod tests {
             inode: 3,
             hard_link_to: None,
             ctime_nsec: 0,
+            is_file: true,
             ..Default::default()
         });
-        */
         
 
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files));
@@ -223,9 +221,7 @@ mod tests {
     }
     #[test]
     fn test_merge_layers() {
-        let mut planner = ConexPlanner::default();
-
-        planner.split_threshold = 100;
+        let mut planner = ConexPlanner::default(100);
 
 
         // insert fake ConexFile to planner
@@ -237,6 +233,7 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            is_file: true,
             ..Default::default()
         });
         planner.layer_to_files.push(("/var/lib/docker/overlay2".to_owned(), files.clone()));
@@ -252,9 +249,7 @@ mod tests {
     }
     #[test]
     fn test_fragment_layers() {
-        let mut planner = ConexPlanner::default();
-
-        planner.split_threshold = 50;
+        let mut planner = ConexPlanner::default(50);
 
 
         // insert fake ConexFile to planner
@@ -266,6 +261,7 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            is_file: true,
             ..Default::default()
         });
         
@@ -277,9 +273,7 @@ mod tests {
     }
     #[test]
     fn test_merge_then_fragment_layers() {
-        let mut planner = ConexPlanner::default();
-
-        planner.split_threshold = 75;
+        let mut planner = ConexPlanner::default(75);
 
 
         // insert fake ConexFile to planner
@@ -291,6 +285,7 @@ mod tests {
             inode: 1,
             hard_link_to: None,
             ctime_nsec: 0,
+            is_file: true,
             ..Default::default()
         });
         
@@ -310,4 +305,3 @@ mod tests {
         
     }
 }
-*/
