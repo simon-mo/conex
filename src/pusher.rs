@@ -345,6 +345,7 @@ impl ContainerPusher {
         // TODO: add some progress bar niceties: remove the completed pbar, make the as logs
         let timer_planner_start = Instant::now();
         let mut planner = ConexPlanner::default(threshold);
+
         for layer in layers {
             planner.ingest_dir(&layer);
         }
@@ -369,7 +370,6 @@ impl ContainerPusher {
         info!("Layer sizes: {:?}", layers_to_size);
         let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx, local_image_path.clone());
         let upload_task = tokio::spawn(async move { uploader.upload(plan, jobs).await });
-
         if show_progress {
             let bars = layers_to_size
                 .into_iter()

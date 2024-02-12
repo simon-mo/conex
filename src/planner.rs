@@ -27,7 +27,6 @@ pub struct ConexFile {
     pub chunk_size: Option<usize>,
     pub segment_idx: Option<usize>
 }
-
 impl ConexPlanner {
     pub fn default(threshold: usize) -> Self {
         Self {
@@ -119,8 +118,7 @@ impl ConexPlanner {
         let mut total_size = 0;
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
-                //println!("{}", file.path.clone().to_string_lossy());
-                //automatically pushes links and (directories?)
+                //automatically pushes links
                 if !file.is_file || file.hard_link_to.is_some(){
                     new_layer.push(file.to_owned());
                     continue;
@@ -132,7 +130,7 @@ impl ConexPlanner {
                     let mut frag = file.clone();
                     if remainder_size + current_layer_size < self.split_threshold{
                         if remainder_size != file.size {
-                            //Case where remainder is a leftover fragment or file fits
+                            //Case where remainder is a leftover fragment
                             frag.chunk_size = Some(remainder_size);
                             frag.start_offset = Some(file.size - remainder_size);
                             frag.segment_idx = Some(segment_idx);

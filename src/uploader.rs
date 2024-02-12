@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use std::fs::Metadata;
 use tracing::{debug, info};
+use std::io;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 
@@ -155,7 +156,7 @@ async fn upload_layer(
                          */
                         continue;
                     }
-                    if meta.is_file() && file.start_offset.is_some() {
+                    if meta.is_file() && file.chunk_size.is_some() {
                         let path = file.path.to_str().unwrap().to_string();
                         //Write fragment metadata into tar
                         let split_metadata = SplitMetadata {
@@ -170,7 +171,7 @@ async fn upload_layer(
                         metadata_header.set_size(metadata_json_bytes.len() as u64);
                         metadata_header.set_cksum();
                         let rel_path = file.relative_path.to_str().unwrap().to_string();
-                        
+                         
                         tar_builder
                             .append_data(
                                 &mut metadata_header,
@@ -178,6 +179,7 @@ async fn upload_layer(
                                 metadata_json_bytes,
                             )
                             .unwrap();
+                        
                         //Write fragment into tar
                         let mut chunk_header = Header::new_gnu();
                         chunk_header.set_size(file.chunk_size.unwrap() as u64);
@@ -196,7 +198,7 @@ async fn upload_layer(
                         drop(hard_file);
                         tar_builder
                             .append(&chunk_header, &mut chunk_data)
-                            .unwrap();
+                            .unwrap()
                     } else {
                         tar_builder
                         .append_path_with_name(&file.path, &relative_path)
@@ -208,6 +210,7 @@ async fn upload_layer(
                         });
                     
                     }
+                    
                 }
             } 
         }
@@ -216,7 +219,6 @@ async fn upload_layer(
         // Trigger encoding and hash compute to finish.
         // This should also drop the producer trigger buffer to close.
         drop(tar_builder);
-
         bytes_written_rx.blocking_recv().unwrap()
     });
 
