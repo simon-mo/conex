@@ -108,7 +108,7 @@ impl ConexPlanner {
             })
             .collect::<Vec<(String, Vec<ConexFile>)>>();
 
-        // Pass 2: Split and collapse layers so that every layer is around 30 MB
+        // Pass 2: Split and collapse layers so that every layer is around threshold size
         let mut new_layer_to_files = Vec::new();
         let mut current_layer_size: usize = 0;
         let mut new_layer = Vec::new();
