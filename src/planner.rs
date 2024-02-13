@@ -58,20 +58,17 @@ impl ConexPlanner {
         queue.push_back(PathBuf::new());
 
         let mut file_metadata_vec = Vec::new();
-        let mut total_size = 0;
 
         while let Some(current_path) = queue.pop_front() {
             let absolute_path = base_path.join(&current_path);
             for entry in fs::read_dir(&absolute_path).unwrap() {
                 let entry = entry.unwrap();
-                // let metadata = entry.metadata().unwrap();
                 let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
                 let relative_path = entry.path().strip_prefix(&base_path).unwrap().to_path_buf();
 
                 if entry.path().is_dir() && !metadata.is_symlink() {
                     queue.push_back(relative_path.to_owned());
                 }
-                total_size += metadata.len() as usize;
                 file_metadata_vec.push(ConexFile {
                     path: entry.path(),
                     relative_path,
@@ -101,6 +98,7 @@ impl ConexPlanner {
                 for file in files.iter_mut() {
                     if let Some(hard_link_to) = inode_map.get(&file.inode) {
                         file.hard_link_to = Some(hard_link_to.to_owned());
+                        file.is_file = false;
                     } else {
                         inode_map.insert(file.inode, file.relative_path.to_owned());
                     }
@@ -110,20 +108,18 @@ impl ConexPlanner {
             })
             .collect::<Vec<(String, Vec<ConexFile>)>>();
 
-        // Pass 2: Split and collapse layers so the size is about 512MB.
+        // Pass 2: Split and collapse layers so that every layer is around 30 MB
         let mut new_layer_to_files = Vec::new();
         let mut current_layer_size: usize = 0;
         let mut new_layer = Vec::new();
         let mut num_layer = 0;
-        let mut total_size = 0;
         for (layer, files) in self.layer_to_files.iter() {
             for file in files.iter() {
                 //automatically pushes links
-                if !file.is_file || file.hard_link_to.is_some(){
+                if !file.is_file {
                     new_layer.push(file.to_owned());
                     continue;
                 }
-                total_size += file.size;
                 let mut segment_idx = 0;
                 let mut remainder_size = file.size;
                 while remainder_size != 0 {
@@ -139,7 +135,7 @@ impl ConexPlanner {
                         new_layer.push(frag);
                         break;
                     } else {
-                        //Split file + layer
+                        //Split file and creates a new layer
                         frag.start_offset = Some(file.size - remainder_size);
                         frag.chunk_size = Some(self.split_threshold - current_layer_size);
                         frag.segment_idx = Some(segment_idx);
@@ -161,14 +157,14 @@ impl ConexPlanner {
         new_layer_to_files.clone()
     }
 }
-// unit test module
+// unit test module  
 #[cfg(test)]
 mod tests {
     use super::*;
+    //1 layer of 3 files with 100 bytes, threshold of 100 bytes per layer -> 3 layers of 100 bytes
     #[test]
     fn test_split_layers() {
         let mut planner = ConexPlanner::default(100);
-        // insert fake ConexFile to planner
         let mut files = Vec::new();
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/123"),
@@ -217,12 +213,11 @@ mod tests {
         let mut c_files = t_files.clone();
         assert_eq!(c_files.pop().unwrap().size, 100);
     }
+
+    //2 layers of 1 file each with 50 bytes per file, threshold of 100 bytes per layer -> 1 layers of 2 files of 50 bytes each
     #[test]
     fn test_merge_layers() {
         let mut planner = ConexPlanner::default(100);
-
-
-        // insert fake ConexFile to planner
         let mut files = Vec::new();
         files.push(ConexFile {
             path: PathBuf::from("/var/lib/docker/overlay2/123"),
@@ -245,6 +240,8 @@ mod tests {
         assert_eq!(c_files.pop().unwrap().size, 50);
         assert_eq!(c_files.pop().unwrap().size, 50);
     }
+
+    //1 layer of 1 file with 100 bytes, threshold of 50 bytes per layer -> 2 layers of 1 file of 50 bytes each
     #[test]
     fn test_fragment_layers() {
         let mut planner = ConexPlanner::default(50);
@@ -269,6 +266,8 @@ mod tests {
         let plan = planner.generate_plan();
         assert_eq!(plan.len(), 2, "plan is: {:?}", plan);
     }
+
+    //2 layer of 1 file with 50 bytes each, threshold of 75 bytes per layer -> 2 layers, first layer with [50,25], second layer with [25]
     #[test]
     fn test_merge_then_fragment_layers() {
         let mut planner = ConexPlanner::default(75);

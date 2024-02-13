@@ -15,9 +15,7 @@ use tar::{Builder as TarBuilder, EntryType, Header};
 use std::io::prelude::*;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
-use std::fs::Metadata;
 use tracing::{debug, info};
-use std::io;
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 
@@ -156,6 +154,7 @@ async fn upload_layer(
                          */
                         continue;
                     }
+                    //Appends regular files that have been fragmented into the tar builder
                     if meta.is_file() && file.chunk_size.is_some() {
                         let path = file.path.to_str().unwrap().to_string();
                         //Write fragment metadata into tar
@@ -200,6 +199,7 @@ async fn upload_layer(
                             .append(&chunk_header, &mut chunk_data)
                             .unwrap()
                     } else {
+                        //Appends files that have not been fragmented
                         tar_builder
                         .append_path_with_name(&file.path, &relative_path)
                         .unwrap_or_else(|e| {
