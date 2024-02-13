@@ -51,11 +51,12 @@ impl ContainerPusher {
             client: Client::new(),
         }
     }
-    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, local_image_path: Option<PathBuf>) {
+
+    pub async fn push(&self, source_image: String, jobs: usize, show_progress: bool, local_image_path: Option<PathBuf>, threshold: usize) {
         let repo_info = RepoInfo::from_string(source_image.clone()).await;
 
         let mut layer_descriptors = self
-            .push_blobs(repo_info.clone(), jobs, show_progress, local_image_path.clone())
+            .push_blobs(repo_info.clone(), jobs, show_progress, local_image_path.clone(), threshold)
             .await;
         info!("Pushed blobs: {:?}", layer_descriptors);
         let config_descriptor = self
@@ -256,6 +257,7 @@ impl ContainerPusher {
         jobs: usize,
         show_progress: bool,
         local_image_path: Option<PathBuf>,
+        threshold: usize,
     ) -> Vec<Descriptor> {
         let image_info = self
             .docker
@@ -342,7 +344,8 @@ impl ContainerPusher {
         // TODO: upload the oci config as well. ensure we can actually pull it.
         // TODO: add some progress bar niceties: remove the completed pbar, make the as logs
         let timer_planner_start = Instant::now();
-        let mut planner = ConexPlanner::default();
+        let mut planner = ConexPlanner::default(threshold);
+
         for layer in layers {
             planner.ingest_dir(&layer);
         }
@@ -367,7 +370,6 @@ impl ContainerPusher {
         info!("Layer sizes: {:?}", layers_to_size);
         let uploader = ConexUploader::new(self.client.clone(), repo_info.clone(), progress_tx, local_image_path.clone());
         let upload_task = tokio::spawn(async move { uploader.upload(plan, jobs).await });
-
         if show_progress {
             let bars = layers_to_size
                 .into_iter()

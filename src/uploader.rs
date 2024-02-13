@@ -1,5 +1,6 @@
 use crate::hash::StreamingHashWriter;
 use crate::planner::ConexFile;
+use crate::planner::ConexPlanner;
 use crate::progress::{ProgressStreamer, ProgressWriter, UpdateItem};
 use crate::repo_info::RepoInfo;
 use bytes::Bytes;
@@ -7,14 +8,18 @@ use oci_spec::image::Descriptor;
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::{vec, fs};
 use tar::{Builder as TarBuilder, EntryType, Header};
+use std::io::prelude::*;
+use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info};
 
 use zstd::stream::write::Encoder as ZstdEncoder;
 
 use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
 
 pub struct BlockingWriter<T>
 where
@@ -61,6 +66,14 @@ pub struct ConexUploader {
     repo_info: RepoInfo,
     progress_sender: tokio::sync::mpsc::UnboundedSender<UpdateItem>,
     local_image_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SplitMetadata {
+    path: String,
+    start_offset: u32,
+    chunk_size: u32,
+    total_size: u64,
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 512 * 1024 * 1024;
@@ -110,21 +123,20 @@ async fn upload_layer(
         );
         let mut tar_builder = TarBuilder::new(progress_writer);
         tar_builder.follow_symlinks(false);
-
         for file in files {
-            let meta = &file.path.symlink_metadata().unwrap();
+            let meta = file.meta.clone().unwrap();
             match file.hard_link_to {
                 Some(hard_link_to) => {
                     let mut header = Header::new_gnu();
-                    header.set_metadata(meta);
-                    header.set_size(0);
+                    header.set_metadata(&meta.clone());
+                    header.set_size(file.size.clone() as u64);
                     header.set_entry_type(EntryType::Link);
                     tar_builder
-                        .append_link(&mut header, file.relative_path, hard_link_to)
-                        .unwrap();
+                    .append_link(&mut header, file.relative_path.clone(), hard_link_to)
+                    .unwrap();        
                 }
                 None => {
-                    let mut relative_path = file.relative_path.to_str().unwrap().to_string();
+                    let mut relative_path = file.relative_path.clone().to_str().unwrap().to_string();
                     if meta.is_dir()
                         // && !meta.is_symlink()
                         && !relative_path.is_empty()
@@ -134,14 +146,61 @@ async fn upload_layer(
                     }
 
                     if !meta.is_dir() && !meta.is_file() && !meta.is_symlink() {
-                        // info!(
-                        //     "Unsupported file type {:?} for file {:?}",
-                        //     meta.file_type(),
-                        //     file.path
-                        // );
+                        /*info!(
+                             "Unsupported file type {:?} for file {:?}",
+                             meta.file_type(),
+                             file.path
+                         );
+                         */
                         continue;
                     }
-                    tar_builder
+                    //Appends regular files that have been fragmented into the tar builder
+                    if meta.is_file() && file.chunk_size.is_some() {
+                        let path = file.path.to_str().unwrap().to_string();
+                        //Write fragment metadata into tar
+                        let split_metadata = SplitMetadata {
+                            path: path.clone(),
+                            start_offset: file.start_offset.unwrap() as u32,
+                            chunk_size: file.chunk_size.unwrap() as u32,
+                            total_size: file.size as u64,
+                        };
+                        let metadata_json = serde_json::to_string(&split_metadata).unwrap();
+                        let metadata_json_bytes = metadata_json.as_bytes();
+                        let mut metadata_header = Header::new_gnu();
+                        metadata_header.set_size(metadata_json_bytes.len() as u64);
+                        metadata_header.set_cksum();
+                        let rel_path = file.relative_path.to_str().unwrap().to_string();
+                         
+                        tar_builder
+                            .append_data(
+                                &mut metadata_header,
+                                format!("{}.split-metadata.{}.json", rel_path.clone(), file.segment_idx.unwrap().clone()),
+                                metadata_json_bytes,
+                            )
+                            .unwrap();
+                        
+                        //Write fragment into tar
+                        let mut chunk_header = Header::new_gnu();
+                        chunk_header.set_size(file.chunk_size.unwrap() as u64);
+                        chunk_header.set_entry_type(tar::EntryType::Regular);
+                        chunk_header.set_path(&rel_path).unwrap();
+                        chunk_header.set_uid(meta.clone().uid().into());                            
+                        chunk_header.set_gid(meta.clone().gid().into());
+                        chunk_header.set_cksum();
+
+                        let mut hard_file = File::open(path.clone()).unwrap();
+                        let mut buffer = Vec::new();
+                        let _ = hard_file.read_to_end(&mut buffer);
+                        let start = file.start_offset.unwrap();
+                        let end = start + file.chunk_size.unwrap();
+                        let mut chunk_data = &buffer[start..end];
+                        drop(hard_file);
+                        tar_builder
+                            .append(&chunk_header, &mut chunk_data)
+                            .unwrap()
+                    } else {
+                        //Appends files that have not been fragmented
+                        tar_builder
                         .append_path_with_name(&file.path, &relative_path)
                         .unwrap_or_else(|e| {
                             panic!(
@@ -149,15 +208,17 @@ async fn upload_layer(
                                 file.path, relative_path, e
                             )
                         });
+                    
+                    }
+                    
                 }
-            }
+            } 
         }
 
         tar_builder.finish().unwrap();
         // Trigger encoding and hash compute to finish.
         // This should also drop the producer trigger buffer to close.
         drop(tar_builder);
-
         bytes_written_rx.blocking_recv().unwrap()
     });
 
@@ -239,7 +300,8 @@ async fn upload_layer(
                 crate::progress::UpdateType::SocketSend,
                 Bytes::copy_from_slice(&send_buffer[0..buf_len]),
             );
-
+            
+            
             // Note that because content range is inclusive, we need to subtract 1 from the end offset.
             let upload_chunk_resp = client
                 .execute({
@@ -361,7 +423,6 @@ impl ConexUploader {
             .iter()
             .map(|(key, _)| key.clone())
             .collect::<Vec<String>>();
-
         let mut parallel_uploads = tokio::task::JoinSet::new();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(jobs));
         // plan.into_iter().enumerate().for_each(|index, (layer_id, paths)| 

@@ -25,14 +25,14 @@ test-push:
 test-push-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
-    cargo run -- push localhost:$DOCKER_PORT/workload
+    docker build -t localhost:5555/workload -f workloads/Dockerfile workloads
+    cargo run -- push localhost:5555/workload 31457280
 
 test-local-write-workload:
     #!/usr/bin/env bash
     set -ex
-    docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
-    cargo run -- --local-image-path "/home/ethanxu/conex" push localhost:$DOCKER_PORT/workload
+    docker build -t localhost:5555/workload -f workloads/Dockerfile workloads
+    cargo run -- --local-image-path "/home/ubuntu/conex" push localhost:5555/workload 31457280
 
 get-manifest:
     #!/usr/bin/env bash
@@ -58,7 +58,8 @@ test-real-push-alpine:
     cargo run -- push simonmok/alpine
 
 test-pull-local:
-    cargo run -- --jobs 1 pull localhost:$DOCKER_PORT/workload
+    cargo build
+    sudo env "PATH=$PATH" ./target/debug/conex --jobs 1  pull localhost:5000/workload
 
 test-pull-hub:
     cargo build

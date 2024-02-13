@@ -50,7 +50,7 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Push { name: String },
+    Push { name: String , threshold: usize},
 
     Pull { name: String },
 
@@ -95,10 +95,10 @@ async fn main() {
     let local_image_path = args.local_image_path;
 
     match args.command {
-        Commands::Push { name } => {
+        Commands::Push { name, threshold} => {
             println!("Pushing container: {:?}", name);
             let pusher = ContainerPusher::new(docker);
-            pusher.push(name, jobs, show_progress, local_image_path).await;
+            pusher.push(name, jobs, show_progress, local_image_path, threshold).await;
         }
         Commands::Pull { name } => {
             println!("Pulling container: {:?}", name);
