@@ -1,11 +1,8 @@
 use core::panic;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self};
-use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
-use std::cmp;
-use std::io::Write;
 use std::fs::Metadata;
 
 pub struct ConexPlanner {
