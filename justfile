@@ -32,7 +32,7 @@ test-local-write-workload:
     #!/usr/bin/env bash
     set -ex
     docker build -t localhost:$DOCKER_PORT/workload -f workloads/Dockerfile workloads
-    cargo run -- --local-image-path "/home/ethanxu/conex" push localhost:$DOCKER_PORT/workload
+    cargo run -- --local-image-path "$HOME_DIR/conex" push localhost:$DOCKER_PORT/workload
 
 get-manifest:
     #!/usr/bin/env bash
